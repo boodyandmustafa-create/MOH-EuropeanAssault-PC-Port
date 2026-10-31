@@ -1,12 +1,148 @@
+# Medal of Honor: European Assault — PC Port
 
-# Medal of Honor: European Assault - Xbox PC Port Project
+**Version 0.9.0-beta** · Windows 10/11 64-bit · unofficial fan project, made with [Claude Code](https://claude.com/claude-code)
 
-This is an experimental PC port/recompilation project for **Medal of Honor: European Assault** (Xbox version). 
+A native Windows port of *Medal of Honor: European Assault* (Xbox, USA / NTSC‑U), made by **statically
+recompiling** the game's own program (`DEFAULT.XBE`) into a PC executable — this is not an emulator, the
+game's own code runs as native x86‑64.
 
-### 🛠️ How it works:
-- Built using the **XboxRecomp** toolchain for static recompilation.
-- Project structure and build files assisted by **Claude Code**.
-- Game assets must be extracted by the user from their own legal ISO using extraction tools (like Xbox ISO extractors).
+> Not affiliated with, endorsed by or sponsored by Electronic Arts. *Medal of Honor* and *European Assault*
+> are trademarks of Electronic Arts Inc. **No game data is included in this download — you need your own
+> copy of the game.**
 
-### ⚠️ Legal Disclaimer (IMPORTANT):
-**This repository does NOT contain any copyrighted assets, game binaries, ISOs, or proprietary code owned by EA or Xbox. This repository only contains build configurations, scripts, and helper tools. Users must provide their own legal copy of the game to run this project.**
+**[⬇️ Download the latest release](../../releases/latest)** — see [Install](#install) below.
+
+<!-- Replace the lines below with real images once captured; see SHOT_LIST for exactly what to take. -->
+<p align="center">
+  <img src="media/01_launcher.png" width="45%">
+  <img src="media/02_rain_level.png" width="45%">
+</p>
+<p align="center">
+  <img src="media/03_fov_compare.png" width="45%">
+  <img src="media/04_blood.png" width="45%">
+</p>
+
+## What this port adds over the Xbox original
+
+- **Direct3D 11 renderer** — widescreen 16:9, any resolution up to 4K, wider field of view, a much longer
+  draw distance, FXAA and anisotropic filtering (all adjustable live).
+- **Mouse and keyboard**, with full key binding, native mouse-look, plus gamepad with rumble and
+  auto‑switching Xbox / PlayStation / keyboard button prompts.
+- **Sharper fonts** for every menu, HUD and subtitle (an Impact-style redraw of all 8 game fonts).
+- **Extras you can turn on**: more/bigger blood, blood and dirt splatter on the screen, rain drops on the
+  screen, "Super Accuracy" (zero weapon spread, no recoil climb), sprint, and a cutscene‑skip option.
+- **Mod support**: drop a PNG into `mods\textures` to replace any texture, a WAV into `mods\sounds` to
+  replace a sound effect, or a text file into `mods\weapons` to tweak a weapon's stats — no game files are
+  shipped, you make your own from your own copy.
+- **A full Arabic language pack** (experimental, partially translated) with mirrored, right‑to‑left menus —
+  including our own in‑game settings screen.
+- **A launcher** (English + Arabic) with setup checks, performance presets, in‑launcher key binding, a
+  save‑backup tool, and an update checker.
+- **An in‑game "Recomp Settings" menu** (`F1`) so every one of the above can be changed without leaving the
+  game, and `F12` saves a screenshot.
+
+Read **[the full development story](PROJECT_STORY.md)** for how each of these was actually built — what
+worked, what didn't, and the detours in between.
+
+## Please know (current limitations)
+
+- Only the **USA / NTSC‑U** version of the game is supported.
+- Only **60 and 90 fps is fully stable**. 120 / 144 / 165 / 240 fps modes exist and mostly work, but are marked
+  *unstable* in the launcher and can stutter in busy scenes.
+- Sound may **rarely** cut out in very long sessions; a guard restarts it automatically, but if it doesn't,
+  please attach `play_log.txt` to an issue.
+- Weapon mods: only a weapon's magazine size is confirmed to work; damage, range and fire‑rate keys are
+  shipped but **experimental**.
+- Sound replacement mods are shipped but **untested end‑to‑end**.
+- The Arabic translation is partial; some mission subtitles stay in English or can clip in narrow boxes.
+- Full list: [KNOWN_ISSUES.txt](KNOWN_ISSUES.txt).
+
+## Install
+
+1. Download the zip from **[Releases](../../releases/latest)** and unzip it anywhere you can write to
+   (not `Program Files`).
+2. Put your own copy of the game's files into the **`game`** folder: `game\DEFAULT.XBE`, `game\DATA\...`
+   and `game\EAGLRM.O`. If you only have a disc image, unpack it with
+   [xdvdfs](https://github.com/antangelo/xdvdfs) or any Xbox ISO extractor.
+3. Run **`Launcher.exe`**. The *Play* tab shows green checks once everything is found. Pick your settings
+   and press **PLAY**.
+4. The very first start (and every new area) compiles shaders — short stutters are normal and go away.
+
+You can also start `MOHEuropeanAssault.exe` directly; it reads the same settings the launcher writes.
+
+## Reporting a problem
+
+Please open an [issue](../../issues/new) (or use the launcher's **Report a problem** button, which opens
+this page and the game folder for you) and attach `play_log.txt` (and `play_log_prev.txt`). Say which
+Windows version and GPU you have. Windows SmartScreen or an antivirus may warn about the unsigned
+executables — that is expected for a small unsigned project, not a sign of a problem.
+
+## Credits
+
+- *Medal of Honor: European Assault* © Electronic Arts. No EA game assets, other than files you supply
+  yourself, are included in this repository or its release downloads.
+- **[xboxrecomp](https://github.com/sp00nznet/xboxrecomp)** by sp00nz (MIT) — the static‑recompilation
+  toolkit this whole project is built on.
+- **[xemu](https://github.com/xemu-project/xemu)** (LGPL‑2.1+; espes, Jannik Vogel, Matt Borgerson and
+  contributors) — the original‑Xbox audio/graphics chip emulation this port's sound and video code is
+  derived from. Source of the derived files: see [SOURCE.txt](SOURCE.txt).
+- **[xdvdfs](https://github.com/antangelo/xdvdfs)** by antangelo — unpacking the Xbox disc image.
+- **[vgmstream](https://github.com/vgmstream/vgmstream)** — used as a development/verification tool only.
+- Written and debugged together with **[Claude Code](https://claude.com/claude-code)** (Anthropic), which
+  wrote and reverse‑engineered most of this port's code interactively with the author.
+- Microsoft DirectX 11, XAudio2, GDI+.
+
+## License
+
+Free to use for personal, non‑commercial purposes, provided unchanged and with all credits intact. See
+[LICENSE.txt](LICENSE.txt); the LGPL‑covered parts are listed in [SOURCE.txt](SOURCE.txt).
+
+---
+
+# بالعربية
+
+# ميدل أوف أونر: يوروبيان أسولت — نسخة الحاسوب
+
+**الإصدار 0.9.0-beta** · ويندوز 10/11 (64 بت) · مشروع معجبين غير رسمي، بمساعدة [Claude Code](https://claude.com/claude-code)
+
+نسخة أصلية لويندوز من لعبة *Medal of Honor: European Assault* (إكس بوكس، النسخة الأمريكية NTSC-U)، صُنعت
+بإعادة ترجمة برنامج اللعبة نفسه (`DEFAULT.XBE`) إلى تنفيذي يعمل على الحاسوب مباشرة — **هذه ليست محاكياً**،
+كود اللعبة نفسه يعمل كـ x86-64 أصلي.
+
+> المشروع غير مرتبط بشركة Electronic Arts ولا برعايتها. *Medal of Honor* و *European Assault* علامتان
+> تجاريتان لشركة Electronic Arts. **لا تحتوي هذه الحزمة على أي ملفات من اللعبة — تحتاج نسختك الخاصة.**
+
+**[⬇️ تحميل آخر إصدار](../../releases/latest)**
+
+## أهم الإضافات على النسخة الأصلية
+
+رسم Direct3D 11 بشاشة عريضة وحتى دقة 4K، مجال رؤية ومسافة رسم أكبر (قابلة للتعديل أثناء اللعب)، دعم كامل
+للماوس والكيبورد مع تصويب أصلي وتخصيص المفاتيح، أيقونات أزرار تتبدل تلقائياً (كيبورد / إكس بوكس /
+بلايستيشن)، خطوط أوضح لكل النصوص، إضافات اختيارية (دم أكثر ووضوحاً، دم وغبار على الشاشة، قطرات مطر على
+الشاشة، دقة عالية بلا ارتداد "Super Accuracy"، ركض، تخطي الفيديوهات)، دعم التعديلات (استبدال الخامات
+والأصوات وتعديل إحصائيات الأسلحة من ملفات نصية بسيطة)، **حزمة لغة عربية كاملة تجريبياً** مع قوائم من اليمين
+لليسار (حتى قائمة الإعدادات الخاصة بنا)، ومشغّل (لانشر) بالعربية والإنجليزية مع فحص الملفات وإعدادات جاهزة
+ونسخ احتياطي للحفظ وتحديثات.
+
+اقرأ **[قصة تطوير المشروع كاملة](PROJECT_STORY.md)** (بالإنجليزية حالياً) لمعرفة كيف بُنيت كل ميزة.
+
+## معلومات مهمة
+
+النسخة الأمريكية فقط مدعومة — 60 إطاراً/ثانية فقط مستقرة بالكامل (الأعلى تجريبي) — قد يختفي الصوت نادراً في
+جلسات طويلة (يُعاد تشغيله تلقائياً) — تعديلات الأسلحة والأصوات تجريبية جزئياً — الترجمة العربية جزئية. القائمة
+الكاملة: [KNOWN_ISSUES.txt](KNOWN_ISSUES.txt).
+
+## التثبيت
+
+1. نزّل الملف المضغوط من [الإصدارات](../../releases/latest) وفكّ ضغطه في مجلد تقدر الكتابة فيه.
+2. ضع ملفات لعبتك الخاصة في مجلد `game` (`DEFAULT.XBE` و`DATA` و`EAGLRM.O`).
+3. شغّل `Launcher.exe`، اضبط إعداداتك، واضغط **PLAY**.
+
+## الإبلاغ عن مشكلة
+
+افتح [تذكرة جديدة](../../issues/new) أو استخدم زر **Report a problem** في اللانشر، وأرفق `play_log.txt`.
+
+## الشكر والترخيص
+
+انظر الأقسام الإنجليزية أعلاه (Credits / License) — نفس الشكر والترخيص يسريان على النسخة العربية من هذا
+المشروع.

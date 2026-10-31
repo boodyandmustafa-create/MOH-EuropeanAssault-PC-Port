@@ -1,0 +1,19 @@
+KNOWN ISSUES - 0.9.0-beta
+=========================
+
+* Only the USA / NTSC-U version of the game is supported (the launcher checks DEFAULT.XBE).
+* Sound may rarely vanish in long sessions (a stuck software mix buffer). A guard restarts it automatically;
+  if the sound is gone for good, save and restart the game, and please attach play_log.txt to a report.
+* Only 60 fps is stable. 120 / 144 / 165 / 240 fps are experimental and can stutter in busy scenes.
+* First run and new areas compile shaders (short stutters); they are cached in shader_cache\.
+* The Arabic language is experimental: only part of the text is translated, the rest stays English.
+* Needs a GPU with Direct3D 11 (feature level 11.0) and the Visual C++ Redistributable (the launcher tells you if it is missing).
+* Soldiers may freeze or respawn doubled when "Keep corpses" (experimental) is on.
+* In the mission-select screen the mouse pointer does not follow every list entry; use the keyboard or gamepad there.
+* Windows SmartScreen / antivirus may warn about the unsigned executables (false positive).
+
+Report others here: https://github.com/boodyandmustafa-create/MOH-EuropeanAssault-PC-Port/issues
+Please attach play_log.txt (and play_log_prev.txt).
+
+المشاكل المعروفة: النسخة الأمريكية فقط - قد يختفي الصوت نادراً في الجلسات الطويلة - 60 إطاراً فقط مستقرة -
+الشيدرز تسبب تقطعاً في أول تشغيل - الترجمة العربية تجريبية - تحذيرات SmartScreen متوقعة.

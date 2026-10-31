@@ -1,0 +1,24 @@
+MEDAL OF HONOR: EUROPEAN ASSAULT - REMASTERED (PC PORT)  -  LICENSE
+===================================================================
+
+1. This package (Launcher.exe, MOHEuropeanAssault.exe, the launcher\ files, the mods\ and languages\ files made for this
+   port, the documentation) is a free, unofficial fan project. It is provided "AS IS", without warranty of any kind.
+   You use it at your own risk.
+
+2. You may use and share this package for personal, NON-COMMERCIAL purposes, provided that it is shared
+   unchanged, complete, and with all credits and notices (README.md, LICENSE.txt, NOTICE.txt, SOURCE.txt).
+   You may not sell it, or charge for access to it, or bundle it with the game's files.
+
+3. Third-party parts keep their own licences (see NOTICE.txt). In particular the parts that come from xemu are
+   licensed under the GNU LGPL 2.1 or later; nothing in this file restricts your rights under that licence
+   (see SOURCE.txt).
+
+4. THE GAME ITSELF IS NOT PART OF THIS PACKAGE. Medal of Honor: European Assault, its name, art, music and code
+   are the property of Electronic Arts Inc. This port contains no game data; you must own the game. The
+   cover picture, the launcher music (a menu track of the game), the menu cursor image, and the fonts / language
+   files derived from the game's own are EA's property, included only to credit the game. If the owner asks for
+   them to be removed, they will be removed.
+
+5. Not affiliated with, endorsed by or sponsored by Electronic Arts. All trademarks belong to their owners.
+
+(This text is not legal advice.)

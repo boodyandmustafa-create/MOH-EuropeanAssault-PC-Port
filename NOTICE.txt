@@ -1,0 +1,32 @@
+THIRD-PARTY NOTICES
+===================
+
+This port is built on the following work. Each keeps its own licence and copyright.
+
+1. xboxrecomp  -  Copyright (c) 2026 sp00nz  -  MIT License
+   https://github.com/sp00nznet/xboxrecomp
+   The recompilation toolkit and runtime libraries (kernel, D3D8 -> D3D11 layer, input, audio glue).
+   Licence text: LICENSES\xboxrecomp-MIT.txt
+
+2. xemu  -  GNU Lesser General Public License, version 2.1 or (at your option) any later version
+   https://github.com/xemu-project/xemu
+   Files used (see SOURCE.txt, copies in source\xemu-derived\):
+     src/apu/apu_core.c, apu_dsp.c, apu_vp.c, apu_regs.h, apu_state.h, apu_debug.h, fpconv.h, apu.h
+        (c) 2012 espes; 2018-2019 Jannik Vogel; 2019-2025 Matt Borgerson and contributors
+     src/nv2a/nv2a_regs.h, nv2a_core.c, nv2a_state.h
+        (c) 2012 espes; 2015 Jannik Vogel; 2018-2025 Matt Borgerson and contributors
+   Licence text: LICENSES\LGPL-2.1.txt
+
+3. xdvdfs  -  Copyright antangelo  -  https://github.com/antangelo/xdvdfs
+   Only recommended in the README for unpacking Xbox disc images. Not included.
+
+4. Microsoft DirectX 11, XAudio2, Windows GDI+ and the Visual C++ runtime are parts of Windows / Microsoft
+   redistributables and are not included.
+
+5. Fonts: the sharper menu / HUD fonts (mods\HDFont, mods\textures\*_hd.png) were drawn with the Windows fonts
+   Impact and Courier New (Monotype / Microsoft) and from the game's own glyphs.
+
+6. Medal of Honor: European Assault  -  Copyright Electronic Arts Inc. All rights reserved.
+   Not included, except as described in LICENSE.txt item 4.
+
+7. Written and debugged with Claude Code (Anthropic), https://claude.com/claude-code.
