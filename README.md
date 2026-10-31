@@ -28,7 +28,7 @@ far beyond the Xbox original, both adjustable live.
 ### Mouse and keyboard with native aim, auto-switching button icons
 Native mouse-look (not a converted controller stick), full key rebinding, gamepad with rumble, and on-screen
 prompts that switch automatically between keyboard, Xbox and PlayStation glyphs.
-<p align="center"><img src="media/feature_controls.png" width="85%"></p>
+<p align="center"><video src="media/feature_controls.mp4" width="85%" controls muted loop playsinline></video></p>
 
 ### Sharper fonts
 Every one of the game's 8 fonts (menus, HUD, subtitles) redrawn at a much higher resolution, same layout.
@@ -48,7 +48,7 @@ St. Nazaire's weather levels.
 
 ### "Super Accuracy" — zero weapon spread, no recoil climb
 An optional, honest toggle for players who want a steadier aim.
-<p align="center"><img src="media/feature_accuracy.gif" width="85%"></p>
+<p align="center"><video src="media/feature_accuracy.mp4" width="85%" controls muted loop playsinline></video></p>
 
 ### Mod support — textures, sounds, weapon stats
 Drop a PNG into `mods\textures`, a WAV into `mods\sounds`, or a text file into `mods\weapons` — no game
@@ -68,7 +68,7 @@ Checks your game files and system, performance presets, in-launcher key binding,
 
 ### In-game "Recomp Settings" menu (F1) and F12 screenshots
 Every setting above, changeable without leaving the game.
-<p align="center"><img src="media/feature_recompsettings.png" width="85%"></p>
+<p align="center"><video src="media/feature_recompsettings.mp4" width="85%" controls muted loop playsinline></video></p>
 
 ## Please know (current limitations)
 
@@ -148,7 +148,7 @@ Free to use for personal, non‑commercial purposes, provided unchanged and with
 <p align="center"><img src="media/feature_renderer.jpg" width="85%"></p>
 
 ### ماوس وكيبورد بتصويب أصلي، أيقونات أزرار تتبدل تلقائياً
-<p align="center"><img src="media/feature_controls.png" width="85%"></p>
+<p align="center"><video src="media/feature_controls.mp4" width="85%" controls muted loop playsinline></video></p>
 
 ### خطوط أوضح لكل النصوص
 <p align="center"><img src="media/feature_fonts.jpg" width="85%"></p>
@@ -163,7 +163,7 @@ Free to use for personal, non‑commercial purposes, provided unchanged and with
 </p>
 
 ### دقة عالية بلا ارتداد أو تشتت رصاص "Super Accuracy"
-<p align="center"><img src="media/feature_accuracy.gif" width="85%"></p>
+<p align="center"><video src="media/feature_accuracy.mp4" width="85%" controls muted loop playsinline></video></p>
 
 ### دعم التعديلات — خامات، أصوات، إحصائيات الأسلحة
 <p align="center"><img src="media/feature_mods.png" width="85%"></p>
@@ -178,7 +178,7 @@ Free to use for personal, non‑commercial purposes, provided unchanged and with
 </p>
 
 ### قائمة "Recomp Settings" داخل اللعبة (F1) ولقطة شاشة بـ F12
-<p align="center"><img src="media/feature_recompsettings.png" width="85%"></p>
+<p align="center"><video src="media/feature_recompsettings.mp4" width="85%" controls muted loop playsinline></video></p>
 
 ## معلومات مهمة
 
