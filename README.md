@@ -32,7 +32,7 @@ prompts that switch automatically between keyboard, Xbox and PlayStation glyphs.
 
 ### Sharper fonts
 Every one of the game's 8 fonts (menus, HUD, subtitles) redrawn at a much higher resolution, same layout.
-<p align="center"><img src="media/feature_fonts.png" width="85%"></p>
+<p align="center"><img src="media/feature_fonts.jpg" width="85%"></p>
 
 ### More blood, on every hit
 Blood amount, size and lifetime are adjustable (Normal/More/Lots/Extreme).
@@ -61,7 +61,10 @@ Including a fully Arabic, mirrored version of this project's own settings screen
 
 ### A launcher (English + Arabic) with setup checks and presets
 Checks your game files and system, performance presets, in-launcher key binding, save backup, update check.
-<p align="center"><img src="media/feature_launcher.png" width="85%"></p>
+<p align="center">
+  <img src="media/feature_launcher_en.jpg" width="42%">
+  <img src="media/feature_launcher_ar.jpg" width="42%">
+</p>
 
 ### In-game "Recomp Settings" menu (F1) and F12 screenshots
 Every setting above, changeable without leaving the game.
@@ -148,7 +151,7 @@ Free to use for personal, non‑commercial purposes, provided unchanged and with
 <p align="center"><img src="media/feature_controls.png" width="85%"></p>
 
 ### خطوط أوضح لكل النصوص
-<p align="center"><img src="media/feature_fonts.png" width="85%"></p>
+<p align="center"><img src="media/feature_fonts.jpg" width="85%"></p>
 
 ### دم أكثر، على كل إصابة
 <p align="center"><img src="media/feature_blood.jpg" width="85%"></p>
@@ -169,7 +172,10 @@ Free to use for personal, non‑commercial purposes, provided unchanged and with
 <p align="center"><img src="media/feature_arabic.png" width="85%"></p>
 
 ### مشغّل (لانشر) عربي/إنجليزي بفحص الملفات وإعدادات جاهزة
-<p align="center"><img src="media/feature_launcher.png" width="85%"></p>
+<p align="center">
+  <img src="media/feature_launcher_en.jpg" width="42%">
+  <img src="media/feature_launcher_ar.jpg" width="42%">
+</p>
 
 ### قائمة "Recomp Settings" داخل اللعبة (F1) ولقطة شاشة بـ F12
 <p align="center"><img src="media/feature_recompsettings.png" width="85%"></p>
