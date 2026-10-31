@@ -53,11 +53,10 @@ An optional, honest toggle for players who want a steadier aim.
 ### Mod support — textures, sounds, weapon stats
 Drop a PNG into `mods\textures`, a WAV into `mods\sounds`, or a text file into `mods\weapons` — no game
 files are shipped, every player builds their own from their own copy.
-<p align="center"><img src="media/feature_mods.png" width="85%"></p>
 
 ### A full Arabic language pack, mirrored right-to-left menus
 Including a fully Arabic, mirrored version of this project's own settings screen.
-<p align="center"><img src="media/feature_arabic.png" width="85%"></p>
+<p align="center"><img src="media/feature_arabic.jpg" width="85%"></p>
 
 ### A launcher (English + Arabic) with setup checks and presets
 Checks your game files and system, performance presets, in-launcher key binding, save backup, update check.
@@ -166,10 +165,11 @@ Free to use for personal, non‑commercial purposes, provided unchanged and with
 <p align="center"><video src="media/feature_accuracy.mp4" width="85%" controls muted loop playsinline></video></p>
 
 ### دعم التعديلات — خامات، أصوات، إحصائيات الأسلحة
-<p align="center"><img src="media/feature_mods.png" width="85%"></p>
+استبدال أي خامة من `mods\textures`، أو صوت من `mods\sounds`، أو تعديل إحصائيات سلاح بملف نصي في
+`mods\weapons` — لا تُشحن أي ملفات من اللعبة، كل لاعب يصنع ملفاته من نسخته الخاصة.
 
 ### حزمة لغة عربية كاملة تجريبياً بقوائم من اليمين لليسار
-<p align="center"><img src="media/feature_arabic.png" width="85%"></p>
+<p align="center"><img src="media/feature_arabic.jpg" width="85%"></p>
 
 ### مشغّل (لانشر) عربي/إنجليزي بفحص الملفات وإعدادات جاهزة
 <p align="center">
