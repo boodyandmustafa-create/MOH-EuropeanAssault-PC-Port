@@ -23,7 +23,7 @@ worked, what didn't, and the detours in between.
 ### Direct3D 11 rendering — widescreen, 4K, wider view, longer draw distance
 Native 16:9, any resolution up to 4K, FXAA, anisotropic filtering — plus a field of view and a draw distance
 far beyond the Xbox original, both adjustable live.
-<p align="center"><img src="media/feature_renderer.png" width="85%"></p>
+<p align="center"><img src="media/feature_renderer.jpg" width="85%"></p>
 
 ### Mouse and keyboard with native aim, auto-switching button icons
 Native mouse-look (not a converted controller stick), full key rebinding, gamepad with rumble, and on-screen
@@ -36,14 +36,14 @@ Every one of the game's 8 fonts (menus, HUD, subtitles) redrawn at a much higher
 
 ### More blood, on every hit
 Blood amount, size and lifetime are adjustable (Normal/More/Lots/Extreme).
-<p align="center"><img src="media/feature_blood.png" width="85%"></p>
+<p align="center"><img src="media/feature_blood.jpg" width="85%"></p>
 
 ### Screen blood, dirt and rain
 Optional effects drawn on the screen itself: blood/dirt from a nearby hit or explosion, and rain drops in
 St. Nazaire's weather levels.
 <p align="center">
-  <img src="media/feature_screenfx.png" width="42%">
-  <img src="media/feature_rain.png" width="42%">
+  <img src="media/feature_screenfx.jpg" width="42%">
+  <img src="media/feature_rain.jpg" width="42%">
 </p>
 
 ### "Super Accuracy" — zero weapon spread, no recoil climb
@@ -142,7 +142,7 @@ Free to use for personal, non‑commercial purposes, provided unchanged and with
 اقرأ **[قصة تطوير المشروع كاملة](PROJECT_STORY.md)** (بالإنجليزية حالياً) لمعرفة كيف بُنيت كل ميزة.
 
 ### رسم Direct3D 11 — شاشة عريضة، 4K، مجال رؤية ومسافة رسم أكبر
-<p align="center"><img src="media/feature_renderer.png" width="85%"></p>
+<p align="center"><img src="media/feature_renderer.jpg" width="85%"></p>
 
 ### ماوس وكيبورد بتصويب أصلي، أيقونات أزرار تتبدل تلقائياً
 <p align="center"><img src="media/feature_controls.png" width="85%"></p>
@@ -151,12 +151,12 @@ Free to use for personal, non‑commercial purposes, provided unchanged and with
 <p align="center"><img src="media/feature_fonts.png" width="85%"></p>
 
 ### دم أكثر، على كل إصابة
-<p align="center"><img src="media/feature_blood.png" width="85%"></p>
+<p align="center"><img src="media/feature_blood.jpg" width="85%"></p>
 
 ### دم وغبار ومطر على الشاشة نفسها
 <p align="center">
-  <img src="media/feature_screenfx.png" width="42%">
-  <img src="media/feature_rain.png" width="42%">
+  <img src="media/feature_screenfx.jpg" width="42%">
+  <img src="media/feature_rain.jpg" width="42%">
 </p>
 
 ### دقة عالية بلا ارتداد أو تشتت رصاص "Super Accuracy"
