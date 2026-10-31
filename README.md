@@ -17,9 +17,6 @@ game's own code runs as native x86‑64.
 Read **[the full development story](PROJECT_STORY.md)** for how each of these was actually built — what
 worked, what didn't, and the detours in between.
 
-<!-- Each heading below has one placeholder image/clip under it; see SHOT_LIST for exactly what to take.
-     Replace the src with your real file once captured (same folder, media/). -->
-
 ### Direct3D 11 rendering — widescreen, 4K, wider view, longer draw distance
 Native 16:9, any resolution up to 4K, FXAA, anisotropic filtering — plus a field of view and a draw distance
 far beyond the Xbox original, both adjustable live.
