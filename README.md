@@ -12,37 +12,60 @@ game's own code runs as native x86‑64.
 
 **[⬇️ Download the latest release](../../releases/latest)** — see [Install](#install) below.
 
-<!-- Replace the lines below with real images once captured; see SHOT_LIST for exactly what to take. -->
-<p align="center">
-  <img src="media/01_launcher.png" width="45%">
-  <img src="media/02_rain_level.png" width="45%">
-</p>
-<p align="center">
-  <img src="media/03_fov_compare.png" width="45%">
-  <img src="media/04_blood.png" width="45%">
-</p>
-
-## What this port adds over the Xbox original
-
-- **Direct3D 11 renderer** — widescreen 16:9, any resolution up to 4K, wider field of view, a much longer
-  draw distance, FXAA and anisotropic filtering (all adjustable live).
-- **Mouse and keyboard**, with full key binding, native mouse-look, plus gamepad with rumble and
-  auto‑switching Xbox / PlayStation / keyboard button prompts.
-- **Sharper fonts** for every menu, HUD and subtitle (an Impact-style redraw of all 8 game fonts).
-- **Extras you can turn on**: more/bigger blood, blood and dirt splatter on the screen, rain drops on the
-  screen, "Super Accuracy" (zero weapon spread, no recoil climb), sprint, and a cutscene‑skip option.
-- **Mod support**: drop a PNG into `mods\textures` to replace any texture, a WAV into `mods\sounds` to
-  replace a sound effect, or a text file into `mods\weapons` to tweak a weapon's stats — no game files are
-  shipped, you make your own from your own copy.
-- **A full Arabic language pack** (experimental, partially translated) with mirrored, right‑to‑left menus —
-  including our own in‑game settings screen.
-- **A launcher** (English + Arabic) with setup checks, performance presets, in‑launcher key binding, a
-  save‑backup tool, and an update checker.
-- **An in‑game "Recomp Settings" menu** (`F1`) so every one of the above can be changed without leaving the
-  game, and `F12` saves a screenshot.
+## Features
 
 Read **[the full development story](PROJECT_STORY.md)** for how each of these was actually built — what
 worked, what didn't, and the detours in between.
+
+<!-- Each heading below has one placeholder image/clip under it; see SHOT_LIST for exactly what to take.
+     Replace the src with your real file once captured (same folder, media/). -->
+
+### Direct3D 11 rendering — widescreen, 4K, wider view, longer draw distance
+Native 16:9, any resolution up to 4K, FXAA, anisotropic filtering — plus a field of view and a draw distance
+far beyond the Xbox original, both adjustable live.
+<p align="center"><img src="media/feature_renderer.png" width="85%"></p>
+
+### Mouse and keyboard with native aim, auto-switching button icons
+Native mouse-look (not a converted controller stick), full key rebinding, gamepad with rumble, and on-screen
+prompts that switch automatically between keyboard, Xbox and PlayStation glyphs.
+<p align="center"><img src="media/feature_controls.png" width="85%"></p>
+
+### Sharper fonts
+Every one of the game's 8 fonts (menus, HUD, subtitles) redrawn at a much higher resolution, same layout.
+<p align="center"><img src="media/feature_fonts.png" width="85%"></p>
+
+### More blood, on every hit
+Blood amount, size and lifetime are adjustable (Normal/More/Lots/Extreme).
+<p align="center"><img src="media/feature_blood.png" width="85%"></p>
+
+### Screen blood, dirt and rain
+Optional effects drawn on the screen itself: blood/dirt from a nearby hit or explosion, and rain drops in
+St. Nazaire's weather levels.
+<p align="center">
+  <img src="media/feature_screenfx.png" width="42%">
+  <img src="media/feature_rain.png" width="42%">
+</p>
+
+### "Super Accuracy" — zero weapon spread, no recoil climb
+An optional, honest toggle for players who want a steadier aim.
+<p align="center"><img src="media/feature_accuracy.gif" width="85%"></p>
+
+### Mod support — textures, sounds, weapon stats
+Drop a PNG into `mods\textures`, a WAV into `mods\sounds`, or a text file into `mods\weapons` — no game
+files are shipped, every player builds their own from their own copy.
+<p align="center"><img src="media/feature_mods.png" width="85%"></p>
+
+### A full Arabic language pack, mirrored right-to-left menus
+Including a fully Arabic, mirrored version of this project's own settings screen.
+<p align="center"><img src="media/feature_arabic.png" width="85%"></p>
+
+### A launcher (English + Arabic) with setup checks and presets
+Checks your game files and system, performance presets, in-launcher key binding, save backup, update check.
+<p align="center"><img src="media/feature_launcher.png" width="85%"></p>
+
+### In-game "Recomp Settings" menu (F1) and F12 screenshots
+Every setting above, changeable without leaving the game.
+<p align="center"><img src="media/feature_recompsettings.png" width="85%"></p>
 
 ## Please know (current limitations)
 
@@ -114,17 +137,42 @@ Free to use for personal, non‑commercial purposes, provided unchanged and with
 
 **[⬇️ تحميل آخر إصدار](../../releases/latest)**
 
-## أهم الإضافات على النسخة الأصلية
-
-رسم Direct3D 11 بشاشة عريضة وحتى دقة 4K، مجال رؤية ومسافة رسم أكبر (قابلة للتعديل أثناء اللعب)، دعم كامل
-للماوس والكيبورد مع تصويب أصلي وتخصيص المفاتيح، أيقونات أزرار تتبدل تلقائياً (كيبورد / إكس بوكس /
-بلايستيشن)، خطوط أوضح لكل النصوص، إضافات اختيارية (دم أكثر ووضوحاً، دم وغبار على الشاشة، قطرات مطر على
-الشاشة، دقة عالية بلا ارتداد "Super Accuracy"، ركض، تخطي الفيديوهات)، دعم التعديلات (استبدال الخامات
-والأصوات وتعديل إحصائيات الأسلحة من ملفات نصية بسيطة)، **حزمة لغة عربية كاملة تجريبياً** مع قوائم من اليمين
-لليسار (حتى قائمة الإعدادات الخاصة بنا)، ومشغّل (لانشر) بالعربية والإنجليزية مع فحص الملفات وإعدادات جاهزة
-ونسخ احتياطي للحفظ وتحديثات.
+## الميزات
 
 اقرأ **[قصة تطوير المشروع كاملة](PROJECT_STORY.md)** (بالإنجليزية حالياً) لمعرفة كيف بُنيت كل ميزة.
+
+### رسم Direct3D 11 — شاشة عريضة، 4K، مجال رؤية ومسافة رسم أكبر
+<p align="center"><img src="media/feature_renderer.png" width="85%"></p>
+
+### ماوس وكيبورد بتصويب أصلي، أيقونات أزرار تتبدل تلقائياً
+<p align="center"><img src="media/feature_controls.png" width="85%"></p>
+
+### خطوط أوضح لكل النصوص
+<p align="center"><img src="media/feature_fonts.png" width="85%"></p>
+
+### دم أكثر، على كل إصابة
+<p align="center"><img src="media/feature_blood.png" width="85%"></p>
+
+### دم وغبار ومطر على الشاشة نفسها
+<p align="center">
+  <img src="media/feature_screenfx.png" width="42%">
+  <img src="media/feature_rain.png" width="42%">
+</p>
+
+### دقة عالية بلا ارتداد أو تشتت رصاص "Super Accuracy"
+<p align="center"><img src="media/feature_accuracy.gif" width="85%"></p>
+
+### دعم التعديلات — خامات، أصوات، إحصائيات الأسلحة
+<p align="center"><img src="media/feature_mods.png" width="85%"></p>
+
+### حزمة لغة عربية كاملة تجريبياً بقوائم من اليمين لليسار
+<p align="center"><img src="media/feature_arabic.png" width="85%"></p>
+
+### مشغّل (لانشر) عربي/إنجليزي بفحص الملفات وإعدادات جاهزة
+<p align="center"><img src="media/feature_launcher.png" width="85%"></p>
+
+### قائمة "Recomp Settings" داخل اللعبة (F1) ولقطة شاشة بـ F12
+<p align="center"><img src="media/feature_recompsettings.png" width="85%"></p>
 
 ## معلومات مهمة
 
