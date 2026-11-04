@@ -120,6 +120,8 @@ def main():
         fh.write("Hand edits made inside the generated code (src/recomp/gen), marked with comments.\n"
                  "Re-apply them to a freshly generated gen/ (the line numbers belong to this port's own gen).\n\n")
         fh.write("\n".join(rows) + "\n")
+    for f in os.listdir(os.path.join(HERE, "source_docs")):
+        shutil.copy2(os.path.join(HERE, "source_docs", f), OUT)
     print("staged", OUT, "| marked gen edits:", len(rows))
 
 

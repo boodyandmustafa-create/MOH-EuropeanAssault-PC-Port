@@ -145,6 +145,31 @@ and tools are disabled in the version you download, writing the install instruct
 credits, and building the actual installable package (this repository's releases) from the working project
 folder, as a repeatable, one-command step.
 
+## 0.9.1: faster, a rifle that hits, and enemy tuning
+
+**Speed.** The generated game code reloaded its thread-local register block and the guest-memory base before almost
+every memory access. Caching those once per function (all 21,741 of them), cutting the game thread's waits on the
+emulated CPU lock from 5–6 ms to under 1 ms per frame, answering environment-variable lookups from a cache, and
+building the whole game with profile-guided optimisation (trained on real play) took the same PC from a median of
+131 fps to 161, and the slowest 10% of the time from 89 to 145 fps (+63%). A profile of the result is flat — no single
+hot function left — so the next gains have to come from the recompiler, not from patching.
+
+**The rifle that missed.** The Karabiner 98k hit at 30 fps and sailed over enemies at 60 and above. Bullets fly dead
+straight and time-based, so frame rate was not their motion; slowing the muzzle speed changed nothing either. Logging
+every bullet's direction against the camera showed the cause: at high frame rates the game dropped the camera-kick
+term from the bullet's pitch, so every shot left about 2° high. The direction is now computed the 30 fps way at every
+frame rate, for the player's fast bullets (the Karabiner and rifles of its class).
+
+**Enemy tuning.** Difficulty in this game turns out to change only the player (health 400/200/100/50, revives 2/1/0/0).
+Enemy accuracy and reaction time are not exposed there — a controlled measurement of bullet angle against the player
+found no switch that moves them reliably, so none is shipped. What does work: more enemies (x2 to x5, per difficulty;
+the spawner's remaining pool and its alive-limit are both scaled), enemy damage, and player health/revives through
+`mods\ai\tuning.txt`.
+
+**Smaller things.** A stamina bar, a blood colour picker, a model-detail option, replaced textures switchable while
+playing, DDS texture dump and replacement, F1 settings during play, a rain master switch, saves stored beside the game
+instead of 4–5 GB under `%LOCALAPPDATA%`, a grenade countdown — and this repository now carries the port's source.
+
 ## Things that were tried and didn't make the cut
 
 Not everything attempted shipped. Letting killed soldiers' bodies stay on the ground longer than the
@@ -184,3 +209,10 @@ and whatever the first wave of player reports on [Issues](../../issues) turns up
 خيار لتخطي الفيديوهات، **حزمة لغة عربية كاملة تجريبياً** بقوائم من اليمين لليسار حتى في قائمة الإعدادات
 الخاصة بنا، ومشغّل (لانشر) عربي/إنجليزي يسهّل كل هذا على اللاعب. بعض الأفكار جُرّبت ولم تنجح (إبقاء جثث
 القتلى لفترة أطول) وأُزيلت بصراحة بدل نشرها ناقصة.
+
+**التحديث 0.9.1:** رفعنا الأداء على الجهاز نفسه من وسيط 131 إلى 161 إطاراً، وأبطأ 10% من الوقت من 89 إلى 145 (+63%)،
+بتخزين عناوين السجلات والذاكرة مرة لكل دالة في كل الدوال المترجمة (21,741) وأولوية لخيط اللعبة وتحسين موجَّه بالتجربة.
+وأصلحنا بندقية Karabiner التي كانت تصيب عند 30 إطاراً وتعبر فوق الأعداء عند 60 فأكثر: وجدنا أن اللعبة تُسقط عامل
+ارتداد الكاميرا من اتجاه الرصاصة عند الإطارات العالية فتخرج أعلى بنحو 2°. وأضفنا: عدد أعداء من x2 إلى x5 لكل
+مستوى صعوبة، وضرر الأعداء وصحة اللاعب بملفات نصية، وشريط تحمّل، ومنتقي لون الدم، وجودة النماذج، وتبديل الخامات أثناء
+اللعب، ودعم DDS، وF1 أثناء اللعب، ومفتاح للمطر، ومؤقّت القنبلة، ونقل الحفظ بجانب اللعبة. وكود المشروع صار منشوراً.

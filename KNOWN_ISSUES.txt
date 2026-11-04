@@ -1,19 +1,30 @@
-KNOWN ISSUES - 0.9.0-beta
+KNOWN ISSUES - 0.9.1-beta
 =========================
 
 * Only the USA / NTSC-U version of the game is supported (the launcher checks DEFAULT.XBE).
 * Sound may rarely vanish in long sessions (a stuck software mix buffer). A guard restarts it automatically;
   if the sound is gone for good, save and restart the game, and please attach play_log.txt to a report.
-* Only 60 fps is stable. 120 / 144 / 165 / 240 fps are experimental and can stutter in busy scenes.
+* 60 to 165 fps run well on the author's PC (RTX 4060). 240 fps and weaker PCs can still stutter in busy scenes;
+  pick a lower frame rate and attach play_log.txt (it holds frame-time lines).
 * First run and new areas compile shaders (short stutters); they are cached in shader_cache\.
+* Enemy count (x2 to x5) is experimental and heavy: it can cost frames, may not complete a "kill every enemy"
+  objective as expected, and can crowd the sound mixer. Keep it low on a slower PC.
+* Model detail "Higher" / "Highest" draws better models farther away; its frame cost is not measured on every PC.
+* The Karabiner fix covers the player's fast bullets (muzzle speed 6.5 to 50). The Karabiner is confirmed; other
+  bolt rifles of later levels share its class but were not each tested.
+* At 30 fps the sniper-scope zoom can look like a cut instead of a smooth transition.
+* Enemy accuracy, reaction time and sight range cannot be changed (the game does not expose them).
 * The Arabic language is experimental: only part of the text is translated, the rest stays English.
 * Needs a GPU with Direct3D 11 (feature level 11.0) and the Visual C++ Redistributable (the launcher tells you if it is missing).
 * Soldiers may freeze or respawn doubled when "Keep corpses" (experimental) is on.
 * In the mission-select screen the mouse pointer does not follow every list entry; use the keyboard or gamepad there.
+* Weapon mods: only magazine size is confirmed; damage, range, fire rate and max ammo are experimental. Sound replacement
+  mods are untested end to end. DDS texture replacements: uncompressed and DXT1/3/5 only (BC4-BC7 are not read).
 * Windows SmartScreen / antivirus may warn about the unsigned executables (false positive).
 
 Report others here: https://github.com/boodyandmustafa-create/MOH-EuropeanAssault-PC-Port/issues
 Please attach play_log.txt (and play_log_prev.txt).
 
-المشاكل المعروفة: النسخة الأمريكية فقط - قد يختفي الصوت نادراً في الجلسات الطويلة - 60 إطاراً فقط مستقرة -
-الشيدرز تسبب تقطعاً في أول تشغيل - الترجمة العربية تجريبية - تحذيرات SmartScreen متوقعة.
+المشاكل المعروفة: النسخة الأمريكية فقط - قد يختفي الصوت نادراً في الجلسات الطويلة - 60 حتى 165 إطاراً تعمل جيداً على جهاز المطوّر
+وقد تتقطع 240 والأجهزة الأضعف - عدد الأعداء x2-x5 تجريبي وثقيل - جودة النماذج الأعلى قد تكلّف إطارات - تكبير المنظار عند 30 إطاراً
+قد يبدو قطعاً - دقة الأعداء غير قابلة للتعديل - الترجمة العربية تجريبية - تحذيرات SmartScreen متوقعة.

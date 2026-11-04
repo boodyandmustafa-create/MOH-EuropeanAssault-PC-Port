@@ -14,7 +14,7 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 TOOLKIT = os.path.join(ROOT, "xboxrecomp-0.16.0")
-VERSION = sys.argv[1] if len(sys.argv) > 1 else "0.9.0-beta"
+VERSION = sys.argv[1] if len(sys.argv) > 1 else "0.9.1-beta"
 NAME = "MOH-EuropeanAssault-PC-Port-" + VERSION
 OUT = os.path.join(ROOT, "release", NAME)
 DOCS = os.path.join(HERE, "package_docs")
@@ -86,6 +86,8 @@ def main():
     put(os.path.join(HERE, "mods", "README.txt"), os.path.join("mods", "README.txt"))
     put(os.path.join(HERE, "mods", "weapons", "README.txt"), os.path.join("mods", "weapons", "README.txt"))
     put(os.path.join(HERE, "mods", "sounds", "README.txt"), os.path.join("mods", "sounds", "README.txt"))
+    put(os.path.join(HERE, "mods", "ai", "README.txt"), os.path.join("mods", "ai", "README.txt"))
+    put(os.path.join(HERE, "mods", "ai", "tuning.txt"), os.path.join("mods", "ai", "tuning.txt"))
     put_tree(os.path.join(HERE, "mods", "textures"), os.path.join("mods", "textures"))
     put_tree(os.path.join(HERE, "mods", "screenfx"), os.path.join("mods", "screenfx"))
     put_tree(os.path.join(HERE, "mods", "HDFont"), os.path.join("mods", "HDFont"))
@@ -110,7 +112,7 @@ def main():
             f.write(draw + "\n")
 
     # documents
-    for d in ("README.md", "LICENSE.txt", "NOTICE.txt", "SOURCE.txt", "KNOWN_ISSUES.txt"):
+    for d in ("README.md", "LICENSE.txt", "NOTICE.txt", "SOURCE.txt", "KNOWN_ISSUES.txt", "WHATS_NEW_" + VERSION + ".md"):
         put(os.path.join(DOCS, d), d)
     put(os.path.join(TOOLKIT, "LICENSES", "LGPL-2.1.txt"), os.path.join("LICENSES", "LGPL-2.1.txt"))
     put(os.path.join(TOOLKIT, "LICENSE"), os.path.join("LICENSES", "xboxrecomp-MIT.txt"))

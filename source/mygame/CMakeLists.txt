@@ -92,8 +92,6 @@ set(GAME_SOURCES
     src/main.c
     src/recomp_manual.c
     src/game_patches.c
-    src/ai_tuning.c
-    src/ai_aim.c
     src/recomp_settings.c
     # Add game-specific sources here, e.g.:
     # src/asset_loader.c

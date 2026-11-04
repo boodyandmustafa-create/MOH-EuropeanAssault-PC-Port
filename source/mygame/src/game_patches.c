@@ -3290,3 +3290,8 @@ uint32_t game_lod_level(uint32_t req, uint32_t level)
     }
     return (uint32_t)fixed;
 }
+
+/* The AI tuning and aim code is in its own files but compiled as part of this one: the profile-guided build only
+ * links the object files that existed when the profile was recorded. */
+#include "ai_tuning.c"
+#include "ai_aim.c"

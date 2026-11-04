@@ -1,6 +1,6 @@
 # Medal of Honor: European Assault — PC Port
 
-**Version 0.9.0-beta** · Windows 10/11 64-bit · unofficial fan project, made with [Claude Code](https://claude.com/claude-code)
+**Version 0.9.1-beta** · Windows 10/11 64-bit · unofficial fan project, made with [Claude Code](https://claude.com/claude-code)
 
 A native Windows port of *Medal of Honor: European Assault* (Xbox, USA / NTSC‑U), made by **statically
 recompiling** the game's own program (`DEFAULT.XBE`) into a PC executable — this is not an emulator, the
@@ -11,6 +11,91 @@ game's own code runs as native x86‑64.
 > copy of the game.**
 
 **[⬇️ Download the latest release](../../releases/latest)** — see [Install](#install) below.
+
+## What's new in 0.9.1-beta
+
+### Faster — measured, same PC, same settings
+
+A/B test of the 0.9.0-beta executable against this one (RTX 4060, 165 Hz cap, same level, same route):
+
+| | 0.9.0-beta | 0.9.1-beta | change |
+|---|---|---|---|
+| Median frame rate | 131 fps | **161 fps** | +23% |
+| Slowest 10% of the time | 89 fps | **145 fps** | **+63%** |
+| Median 1% low | 94 fps | **107 fps** | +14% |
+
+In the heaviest places of the author's test (where 0.9.0 dipped to 80–125 fps) the new build stays above 150.
+Gains depend on your PC; the busiest scenes gain the most. What changed inside:
+
+- The whole game code is built with **profile-guided optimisation**, trained on real play.
+- The cached **register and memory base addresses** are loaded once per function instead of before almost every memory
+  access, in all 21,741 recompiled functions.
+- The **game thread gets priority** in the emulated CPU lock: a worker no longer holds it for milliseconds (waits fell
+  from 5–6 ms to under 1 ms per frame).
+- Environment-variable lookups answered from a per-thread cache (they were hit on every frame).
+- A **hitch watchdog** and a per-second `[FRAMES]` line in `play_log.txt` (frame times, lock waits) so a stutter can be
+  traced from a bug report.
+- The developer diagnostics (AI probes, shot and projectile logs, aim measurement) are **compiled out** of the player
+  build, so they cannot cost a frame.
+
+### Gameplay fixes
+
+- **Karabiner 98k (and the whole fast-rifle class) now hits what the crosshair is on at 60 fps and above.** At high
+  frame rates the game dropped the camera-kick term from the bullet's direction, so the bullet left about 2° too high
+  and passed over enemies at range, while at 30 fps it was fine. The direction is now the same at every frame rate.
+  It applies to the player's bullets with a fast muzzle speed (the Karabiner and rifles that share its class), not
+  to machine guns or pistols. `RECOMP_AIM_FIX=0` turns it off.
+- **Weapon mods:** the scanner no longer reads `mods\weapons\README.txt` as if it were a weapon file.
+- **Grenade timer** (new, on by default, switchable): a small circle at the side of the screen counts down the seconds
+  from the moment a grenade's pin is pulled or it is thrown.
+
+### New options (in the launcher and in the in-game Recomp Settings, English and Arabic)
+
+- **Enemy count (heavy, experimental)** — x2 to x5 times the enemies that spawn points create (reinforcements and
+  respawns). Takes effect at the next mission load, can cost frames, and can be turned on or off **per difficulty**
+  (Recruit, Veteran, Elite, Hero) with four extra switches.
+- **Stamina bar** — a yellow sprint bar above the adrenaline meter that drains while you run; when it is empty you
+  return to walking speed and it refills after a few seconds. Sprint speed, duration and recovery time are options.
+- **Blood colour** — Original / Crimson (the new default) / Dark red / **Custom** with Hue, Saturation and Brightness
+  rows and a colour square. The on-screen splatters keep their own colour.
+- **Model detail** (level of detail for every model by distance): Game (the original) / Higher / Highest. Higher and
+  Highest draw the better models farther away, so they can cost frames.
+- **Replaced textures** — On/Off **while playing**, to compare the game's pictures with yours instantly.
+- **Dump textures** is now Off / PNG / **DDS**. DDS replacements are read by the port itself (uncompressed 24/32-bit
+  and DXT1/3/5, old or DX10 header).
+- **Rain master switch** — *Rain* (default **Off**); while it is off, the other four rain rows stay visible but greyed
+  out. With it on, the default strength is Normal. Fog stays as the game has it.
+- **Screen rain** default is now Off in the shipped settings.
+
+### In-game menu and files
+
+- **F1 opens Recomp Settings during play** and the game keeps running behind it. The panel is a window (62% × 78% of the
+  game window) instead of a full-screen takeover; F1 or gamepad Y reopens it at once after closing. The pause menu is
+  untouched. While the panel is up the game gets no input, and held keys are released when it closes.
+- **Saves and the Xbox partition images now live in `xboxdata\`** next to the game instead of 4–5 GB of sparse files
+  under `%LOCALAPPDATA%\xboxrecomp`. Old saves are copied over once (the old folder is left alone).
+- The **menu language** of Recomp Settings follows the game language (English / Arabic).
+
+### AI and difficulty tuning (text files, no game files)
+
+- **`mods\ai\tuning.txt`**: per-difficulty **player max health**, **revives** (medkits) and **enemy damage**
+  (`MaxHealth.Recruit/Veteran/Elite/Hero`, `Revives.*`, `EnemyDamage`), plus `EnemyCount`. See `mods\ai\README.txt`.
+- **`mods\ai\defs.txt`**: override or scale any of the game's named float / int definition fields by name (CRC32 of
+  the name) or hash, optionally for one call site only.
+- Research notes shipped in the README of that folder: in this game the difficulty setting changes **only the player**
+  (health 400/200/100/50, revives 2/1/0/0); enemy accuracy, reaction time and sight range are **not** exposed there.
+
+### Open source
+
+- The port's **source code is published** in [`source/`](source/) under the MIT licence: the port code, the launcher,
+  the in-game settings screen, the tools used to find things in the game, and the xboxrecomp toolkit with this port's
+  changes. The recompiled game code itself (machine-translated EA code) is not included; `gen_hand_edits.txt` lists every
+  hand edit made in it. See [source/README.md](source/README.md).
+
+### Other
+
+- The launcher shows version 0.9.1-beta and compares itself with the newest GitHub release.
+- The shipped `recomp_settings.ini` defaults: rain off, everything else as before.
 
 ## Features
 
@@ -69,12 +154,12 @@ Every setting above, changeable without leaving the game.
 ## Please know (current limitations)
 
 - Only the **USA / NTSC‑U** version of the game is supported.
-- Only **60 and 90 fps is fully stable**. 120 / 144 / 165 / 240 fps modes exist and mostly work, but are marked
-  *unstable* in the launcher and can stutter in busy scenes.
+- 60 to 165 fps now run well on the author's PC (RTX 4060); 240 fps and weaker PCs may still stutter in busy scenes. If
+  a mode stutters for you, pick a lower one and send `play_log.txt` (it holds frame-time lines).
 - Sound may **rarely** cut out in very long sessions; a guard restarts it automatically, but if it doesn't,
   please attach `play_log.txt` to an issue.
-- Weapon mods: only a weapon's magazine size is confirmed to work; damage, range and fire‑rate keys are
-  shipped but **experimental**.
+- Weapon mods: only a weapon's magazine size is confirmed to work; damage, range and fire-rate keys are
+  shipped but **experimental**. Enemy count (x2 to x5) is experimental and heavy: it can cost frames.
 - Sound replacement mods are shipped but **untested end‑to‑end**.
 - The Arabic translation is partial; some mission subtitles stay in English or can clip in narrow boxes.
 - Full list: [KNOWN_ISSUES.txt](KNOWN_ISSUES.txt).
@@ -116,84 +201,7 @@ executables — that is expected for a small unsigned project, not a sign of a p
 
 ## License
 
-Free to use for personal, non‑commercial purposes, provided unchanged and with all credits intact. See
-[LICENSE.txt](LICENSE.txt); the LGPL‑covered parts are listed in [SOURCE.txt](SOURCE.txt).
-
----
-
-# بالعربية
-
-# ميدل أوف أونر: يوروبيان أسولت — نسخة الحاسوب
-
-**الإصدار 0.9.0-beta** · ويندوز 10/11 (64 بت) · مشروع معجبين غير رسمي، بمساعدة [Claude Code](https://claude.com/claude-code)
-
-نسخة أصلية لويندوز من لعبة *Medal of Honor: European Assault* (إكس بوكس، النسخة الأمريكية NTSC-U)، صُنعت
-بإعادة ترجمة برنامج اللعبة نفسه (`DEFAULT.XBE`) إلى تنفيذي يعمل على الحاسوب مباشرة — **هذه ليست محاكياً**،
-كود اللعبة نفسه يعمل كـ x86-64 أصلي.
-
-> المشروع غير مرتبط بشركة Electronic Arts ولا برعايتها. *Medal of Honor* و *European Assault* علامتان
-> تجاريتان لشركة Electronic Arts. **لا تحتوي هذه الحزمة على أي ملفات من اللعبة — تحتاج نسختك الخاصة.**
-
-**[⬇️ تحميل آخر إصدار](../../releases/latest)**
-
-## الميزات
-
-اقرأ **[قصة تطوير المشروع كاملة](PROJECT_STORY.md)** (بالإنجليزية حالياً) لمعرفة كيف بُنيت كل ميزة.
-
-### رسم Direct3D 11 — شاشة عريضة، 4K، مجال رؤية ومسافة رسم أكبر
-<p align="center"><img src="media/feature_renderer.jpg" width="85%"></p>
-
-### ماوس وكيبورد بتصويب أصلي، أيقونات أزرار تتبدل تلقائياً
-<p align="center"><img src="media/feature_controls.gif" width="85%"><br><sub><a href="media/feature_controls.mp4">full-quality video</a></sub></p>
-
-### خطوط أوضح لكل النصوص
-<p align="center"><img src="media/feature_fonts.jpg" width="85%"></p>
-
-### دم أكثر، على كل إصابة
-<p align="center"><img src="media/feature_blood.jpg" width="85%"></p>
-
-### دم وغبار ومطر على الشاشة نفسها
-<p align="center">
-  <img src="media/feature_screenfx.jpg" width="42%">
-  <img src="media/feature_rain.jpg" width="42%">
-</p>
-
-### دقة عالية بلا ارتداد أو تشتت رصاص "Super Accuracy"
-<p align="center"><img src="media/feature_accuracy.gif" width="85%"><br><sub><a href="media/feature_accuracy.mp4">full-quality video</a></sub></p>
-
-### دعم التعديلات — خامات، أصوات، إحصائيات الأسلحة
-استبدال أي خامة من `mods\textures`، أو صوت من `mods\sounds`، أو تعديل إحصائيات سلاح بملف نصي في
-`mods\weapons` — لا تُشحن أي ملفات من اللعبة، كل لاعب يصنع ملفاته من نسخته الخاصة.
-
-### حزمة لغة عربية كاملة تجريبياً بقوائم من اليمين لليسار
-<p align="center"><img src="media/feature_arabic.jpg" width="85%"></p>
-
-### مشغّل (لانشر) عربي/إنجليزي بفحص الملفات وإعدادات جاهزة
-<p align="center">
-  <img src="media/feature_launcher_en.jpg" width="42%">
-  <img src="media/feature_launcher_ar.jpg" width="42%">
-</p>
-
-### قائمة "Recomp Settings" داخل اللعبة (F1) ولقطة شاشة بـ F12
-<p align="center"><img src="media/feature_recompsettings.gif" width="85%"><br><sub><a href="media/feature_recompsettings.mp4">full-quality video</a></sub></p>
-
-## معلومات مهمة
-
-النسخة الأمريكية فقط مدعومة — 60 إطاراً/ثانية فقط مستقرة بالكامل (الأعلى تجريبي) — قد يختفي الصوت نادراً في
-جلسات طويلة (يُعاد تشغيله تلقائياً) — تعديلات الأسلحة والأصوات تجريبية جزئياً — الترجمة العربية جزئية. القائمة
-الكاملة: [KNOWN_ISSUES.txt](KNOWN_ISSUES.txt).
-
-## التثبيت
-
-1. نزّل الملف المضغوط من [الإصدارات](../../releases/latest) وفكّ ضغطه في مجلد تقدر الكتابة فيه.
-2. ضع ملفات لعبتك الخاصة في مجلد `game` (`DEFAULT.XBE` و`DATA` و`EAGLRM.O`).
-3. شغّل `Launcher.exe`، اضبط إعداداتك، واضغط **PLAY**.
-
-## الإبلاغ عن مشكلة
-
-افتح [تذكرة جديدة](../../issues/new) أو استخدم زر **Report a problem** في اللانشر، وأرفق `play_log.txt`.
-
-## الشكر والترخيص
-
-انظر الأقسام الإنجليزية أعلاه (Credits / License) — نفس الشكر والترخيص يسريان على النسخة العربية من هذا
-المشروع.
+The **source code** ([`source/`](source/)) is under the MIT licence ([source/LICENSE-PORT.txt](source/LICENSE-PORT.txt)); the
+download package is free for personal, non-commercial use, shared unchanged and with all credits (see
+[LICENSE.txt](LICENSE.txt)). The LGPL-covered parts are listed in [SOURCE.txt](SOURCE.txt). The recompiled game code is
+not published.

@@ -1098,9 +1098,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
      * title's half-time spin in KickOff mostly gone). =0 turns it off. */
     if (!getenv("RECOMP_FLUSH_AHEAD"))
         _putenv("RECOMP_FLUSH_AHEAD=262144");
-    /* One [KICK] line every 5 s (how the kick was answered): kept on while the stall hunt runs. */
-    if (!getenv("RECOMP_KICK_STATS"))
-        _putenv("RECOMP_KICK_STATS=1");
+    /* RECOMP_KICK_STATS=1 prints one [KICK] line every 5 s (how the kick was answered): a diagnostic, off by default. */
     /* The music and speech stream (a 2400-sample loop the title refills just
      * ahead of the position it reads, voices with buffer base 0x1E70..78)
      * is read 20 ms behind that position (apu_vp.c, RECOMP_APU_LAG): the
