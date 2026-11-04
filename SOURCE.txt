@@ -11,10 +11,10 @@ Our changes to those files:
   nv2a_core.c, nv2a_regs.h, nv2a_state.h, apu_*.c/h, fpconv.h, apu.h - used as extracted by the xboxrecomp
               toolkit (https://github.com/sp00nznet/xboxrecomp, MIT, which also carries the LGPL texts).
 
-Your rights under the LGPL: you may modify these files and use your modified version in place of ours. The rest
-of the program (the recompiled game and the port code) is not open source. If you want to relink a modified
-version of the LGPL files with the rest, open an issue on the project page and the object files needed for relinking
-will be provided:
-  https://github.com/boodyandmustafa-create/MOH-EuropeanAssault-PC-Port/issues
+The rest of the program is open source too: the port's own code is in the folder  source\  of the project page
+(https://github.com/boodyandmustafa-create/MOH-EuropeanAssault-PC-Port/tree/main/source), under the MIT licence
+(source\LICENSE-PORT.txt). The only thing not published is the recompiled game code (source\README.md explains why).
+Your rights under the LGPL: you may modify the LGPL files and use your modified version in place of ours; the whole
+source needed to do so is in that folder.
 
 The full licence text is in LICENSES\LGPL-2.1.txt.

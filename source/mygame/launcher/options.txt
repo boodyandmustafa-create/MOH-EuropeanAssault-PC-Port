@@ -1,0 +1,108 @@
+# Launcher options. One option per line:  tab|key|type|default|values|dep
+#
+#   tab     game, controls, mods, extras, recomp, saves, credits
+#   key     the key written to recomp_settings.ini.  @fov and @draw are special (fov_saved.txt / draw_saved.txt).
+#           Labels come from lang\en.txt / lang\ar.txt:  <key> = name,  <key>.d = description,
+#           <key>.v.<value> = how a value is shown (otherwise the raw value is shown).
+#   type    choice  (values = comma list; the arrows step through it)
+#           toggle  (0 / 1)
+#           lang    (english + every folder of languages\)
+#           bind    (a key binding: default 'keys;pad buttons', key bind_<action> -> kb_/pad_ lines of the ini)
+#           movekey (one movement key; keys bind_move0..3 = forward, back, left, right -> move= line)
+#           action  (a button; the key names what it does, see Act() in launcher.cpp)
+#           link    (a button that opens the address in "default")
+#           note    (text only)
+#   dep     optional 6th field: the key of another option. While that option is 0 this row is greyed out and
+#           cannot be changed (the rain rows depend on "rain")
+#
+game|preset_safe|action||
+game|preset_high|action||
+game|res|choice|1920x1080|1280x720,1366x768,1600x900,1920x1080,2560x1440,3840x2160
+game|fps|choice|60|30,60,90,120,144,165,240
+game|fullscreen|toggle|1|
+game|widescreen|toggle|1|
+game|@fov|choice|90|60,70,75,80,90,100,110,120
+game|@draw|choice|2|1,1.5,2,3,4,5,6,8,10
+game|lod|choice|0|0,1,2
+game|fog|choice|2.0|1.0,1.5,2.0,3.0,4.0
+game|aniso|choice|16|1,2,4,8,16
+game|fxaa|toggle|1|
+game|language|lang|english|
+game|cutscenes|choice|skip|play,skip,off
+game|fps_counter|toggle|0|
+controls|mkb|toggle|1|
+controls|sens|choice|1.00|0.25,0.50,0.75,1.00,1.25,1.50,2.00,3.00
+controls|invert_y|toggle|0|
+controls|split_pads|toggle|0|
+controls|icons|choice|auto|auto,pad,keyboard
+controls|icon_style|choice|ps|xbox,ps
+controls|keys_note|note||
+controls|reset_controls|action||
+controls|bind_move0|movekey|w|
+controls|bind_move1|movekey|s|
+controls|bind_move2|movekey|a|
+controls|bind_move3|movekey|d|
+controls|bind_jump|bind|space;a|
+controls|bind_action|bind|r,enter;x,y|
+controls|bind_crouch|bind|c;b|
+controls|bind_weapon|bind|3,backspace;dleft|
+controls|bind_adrenaline|bind|1;lb|
+controls|bind_medkit|bind|g;rb|
+controls|bind_aim|bind|mouse2;lt|
+controls|bind_fire|bind|mouse1;rt|
+controls|bind_grenade|bind|4,up;dup|
+controls|bind_recall|bind|down;ddown|
+controls|bind_position|bind|right;dright|
+controls|bind_melee|bind|lctrl;r3|
+controls|bind_sprint|bind|lalt;l3|
+controls|bind_pause|bind|esc;start|
+controls|bind_map|bind|tab;back|
+mods|texdump|choice|0|0,1,2
+mods|sounddump|toggle|0|
+mods|texmod|toggle|1|
+mods|open_mods|action||
+mods|open_textures|action||
+mods|open_sounds|action||
+mods|open_languages|action||
+mods|mods_note|note||
+extras|super_accuracy|toggle|1|
+extras|blood|choice|3|0,1,2,3
+extras|blood_time|choice|2|0,1,2,3,4,5,6,7,8
+extras|blood_color|choice|1|0,1,2,3
+extras|blood_hue|choice|350|0,10,20,30,40,50,60,70,80,90,100,110,120,130,140,150,160,170,180,190,200,210,220,230,240,250,260,270,280,290,300,310,320,330,340,350|blood_color=3
+extras|blood_sat|choice|95|0,5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100|blood_color=3
+extras|blood_bright|choice|55|10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100|blood_color=3
+extras|keep_corpses|toggle|0|
+extras|screen_blood|choice|2|0,1,2,3
+extras|screen_dirt|choice|3|0,1,2,3
+extras|rain|choice|0|0,1
+extras|screen_rain|choice|0|0,1,2,3|rain
+extras|rain_amount|choice|2|0,1,2,3|rain
+extras|rain_size|choice|2|0,1,2,3|rain
+extras|rain_speed|choice|2|0,1,2,3|rain
+extras|sprint_speed|choice|1.50|1.00,1.25,1.50,1.75,2.00,2.50,3.00
+extras|sprint_time|choice|5.0|3.0,4.0,5.0,6.0,8.0,10.0,15.0
+extras|sprint_recover|choice|8.0|4.0,6.0,8.0,10.0,15.0,20.0
+extras|stamina_bar|toggle|1|
+extras|enemy_count|choice|1|1,2,3,4,5
+extras|enemy_count_recruit|toggle|1|
+extras|enemy_count_veteran|toggle|1|
+extras|enemy_count_elite|toggle|1|
+extras|enemy_count_hero|toggle|1|
+extras|grenade_timer|toggle|1|
+recomp|pin_game|choice|2|0,1,2,3,4,5,6
+recomp|audio_host|toggle|0|
+recomp|check_updates|toggle|1|
+recomp|open_log|action||
+recomp|copy_info|action||
+recomp|open_screenshots|action||
+saves|open_saves|action||
+saves|backup_saves|action||
+saves|open_backups|action||
+saves|saves_note|note||
+credits|cr_game|link|https://www.ea.com/|
+credits|cr_xboxrecomp|link|https://github.com/sp00nznet|
+credits|cr_xemu|link|https://github.com/xemu-project/xemu|
+credits|cr_xdvdfs|link|https://github.com/antangelo/xdvdfs|
+credits|cr_claude|link|https://claude.com/claude-code|
+credits|report|link|https://github.com/boodyandmustafa-create/MOH-EuropeanAssault-PC-Port/issues|

@@ -1,0 +1,155 @@
+Hand edits made inside the generated code (src/recomp/gen), marked with comments.
+Re-apply them to a freshly generated gen/ (the line numbers belong to this port's own gen).
+
+recomp_0001.c:1460  in sub_00017710
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x00017710u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0001.c:1846  in sub_00017930
+    { extern void game_corpse_trace(uint32_t); game_corpse_trace(0x17930); } /* CORPSE-EXPERIMENT */
+recomp_0001.c:1847  in sub_00017930
+    { extern int game_keep_corpses(int); /* CORPSE-EXPERIMENT */
+recomp_0004.c:1280  in sub_0002B0A0
+    { extern void game_corpse_trace(uint32_t); game_corpse_trace(0x2B0A0); } /* CORPSE-EXPERIMENT */
+recomp_0004.c:1281  in sub_0002B0A0
+    { extern int game_keep_corpses(int); /* CORPSE-EXPERIMENT */
+recomp_0005.c:20204  in sub_00036790
+    uint32_t _dh = MEM32(esp + 4), _dr = MEM32(esp); /* AI-TUNING */
+recomp_0005.c:20225  in sub_00036790
+    { extern uint32_t game_def_i(uint32_t,uint32_t,uint32_t); eax = game_def_i(MEM32(eax), _dh, _dr); } /* AI-TUNING getter */
+recomp_0005.c:20344  in sub_000367F0
+    uint32_t _dh = MEM32(esp + 4), _dr = MEM32(esp); /* AI-TUNING */
+recomp_0005.c:20365  in sub_000367F0
+    { extern float game_def_f(float,uint32_t,uint32_t); fp_push(game_def_f(MEMF(eax), _dh, _dr)); } /* AI-TUNING getter */
+recomp_0006.c:5365  in sub_000388F0
+    { extern int game_keep_corpse_obj(uint32_t); /* CORPSE-EXPERIMENT */
+recomp_0008.c:25692  in sub_0004F920
+    { extern void game_corpse_trace(uint32_t); game_corpse_trace(0x4F920); } /* CORPSE-EXPERIMENT */
+recomp_0008.c:25693  in sub_0004F920
+    { extern int game_keep_corpses(int); /* CORPSE-EXPERIMENT */
+recomp_0008.c:25755  in sub_0004F940
+    { extern int game_keep_corpses(int); /* CORPSE-EXPERIMENT */
+recomp_0011.c:11353  in sub_00065970
+    { extern uint32_t game_pool_size(uint32_t, uint32_t); ecx = game_pool_size(esi, MEM32(esp + 0x14)); } /* CORPSE-EXPERIMENT */
+recomp_0011.c:11850  in sub_00065B20
+    { extern void game_pool_full(uint32_t, uint32_t); game_pool_full(esi, edi); } /* CORPSE-EXPERIMENT */
+recomp_0013.c:8363  in sub_00072E90
+    { extern void game_impact_mat(uint32_t mat, uint32_t fx, uint32_t pass); game_impact_mat(MEM16(esi + 6), MEM32(esp + 0x48), eax); } /* IMPACT-DBG */
+recomp_0014.c:10730  in sub_0007C870
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x0007C870u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0014.c:17315  in sub_0007F260
+    { extern int game_movie_skip_pressed(void); if (game_movie_skip_pressed()) goto loc_0007F2E7; } /* MOVIE-SKIP: a button ends the mission movie through the game's own skip exit (settings: Cutscenes) */
+recomp_0022.c:13978  in sub_000B8250
+    { extern void game_vfx_spawn(void); game_vfx_spawn(); } /* VFX-SPAWN diagnostic */
+recomp_0022.c:18767  in sub_000B97F0
+    { extern void game_vfx_enter(void); game_vfx_enter(); } /* BLOOD-SPRAY */
+recomp_0028.c:12310  in sub_000F1C90
+    { extern float game_lod_scale(uint32_t); xmm0.f[0] *= game_lod_scale(MEM32(esp + 0x18)); } /* LOD-TEST: bucket index x scale (dead soldiers) */
+recomp_0028.c:12364  in sub_000F1C90
+    { extern uint32_t game_lod_level(uint32_t, uint32_t); edi = game_lod_level(ecx, edi); } /* LOD-DEAD: dead soldiers use a fixed level */
+recomp_0029.c:75  in None
+    extern void game_hit_dbg(int, uint32_t); /* HIT-DBG */
+recomp_0029.c:76  in None
+    extern int game_blood_all(float dmg); /* BLOOD-ALL */
+recomp_0029.c:77  in None
+    extern int game_blood_every(void); /* BLOOD-EVERY */
+recomp_0029.c:3014  in sub_000F5180
+    { extern void game_wevent(uint32_t self, uint32_t ev); game_wevent(g_ecx, MEM32(esp + 4)); } /* RELOAD-PROBE */
+recomp_0029.c:3154  in sub_000F5180
+    { extern void game_shot_fire(uint32_t m, uint32_t owner); game_shot_fire(eax, esi); } /* SHOT-PROBE */
+recomp_0029.c:12581  in sub_000F8C80
+    { extern int game_keep_corpses(int); /* CORPSE-EXPERIMENT */
+recomp_0029.c:12582  in sub_000F8C80
+    extern void game_lod_dead(uint32_t); game_lod_dead(ecx); /* LOD-TEST: this soldier is dead */
+recomp_0029.c:17914  in sub_000FA8C0
+    { extern void game_shot_hit(uint32_t obj, uint32_t victim); game_shot_hit(MEM32(esp + 4), L_ecx); } /* SHOT-PROBE */
+recomp_0029.c:20451  in sub_000FB7C0
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x000FB7C0u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0029.c:20453  in sub_000FB7C0
+    { extern void game_hit_dbg(int, uint32_t); game_hit_dbg(20, 0); } /* HIT-DBG */
+recomp_0029.c:20539  in sub_000FB7C0
+    { extern void game_shot_result(uint32_t r); game_shot_result(eax & 0xFFu); } /* SHOT-PROBE */
+recomp_0029.c:21079  in sub_000FB7C0
+    { extern void game_hit_dbg(int, uint32_t); { float _d = MEMF(esp + 0xE4); uint32_t _b; memcpy(&_b, &_d, 4); game_hit_dbg(25, _b); } } /* HIT-DBG */
+recomp_0029.c:21095  in sub_000FB7C0
+    { extern void game_hit_dbg(int, uint32_t); { float _d = (float)fp_top(); uint32_t _b; memcpy(&_b, &_d, 4); game_hit_dbg(26, _b); } } /* HIT-DBG */
+recomp_0029.c:21103  in sub_000FB7C0
+    { extern void game_hit_dbg(int, uint32_t); game_hit_dbg(27, 0); } /* HIT-DBG */
+recomp_0029.c:21104  in sub_000FB7C0
+    { extern void game_screen_blood(float, float, float); game_screen_blood(MEMF(esp + 0x120), MEMF(esp + 0x124), MEMF(esp + 0x128)); } /* SCREEN-FX */
+recomp_0029.c:21152  in sub_000FB7C0
+    if (CMP_EQ(_fa, _fb) && !game_blood_every()) goto loc_000FBCC0; /* BLOOD-EVERY: the game rolls 40% blood, 60% dust */ /* je: equal / zero */
+recomp_0029.c:21384  in sub_000FB7C0
+    { extern void game_hit_dbg(int, uint32_t); game_hit_dbg(22, 0); } /* HIT-DBG */
+recomp_0029.c:21408  in sub_000FB7C0
+    { extern void game_hit_dbg(int, uint32_t); game_hit_dbg(21, 0); } /* HIT-DBG */
+recomp_0029.c:21418  in sub_000FB7C0
+    { extern void game_hit_dbg(int, uint32_t); game_hit_dbg(23, 0); } /* HIT-DBG */
+recomp_0029.c:21449  in sub_000FB7C0
+    { extern void game_hit_dbg(int, uint32_t); game_hit_dbg(24, 0); } /* HIT-DBG */
+recomp_0029.c:22480  in sub_000FC370
+    { extern void game_corpse_trace(uint32_t); game_corpse_trace(0xFC370); } /* CORPSE-EXPERIMENT */
+recomp_0029.c:22481  in sub_000FC370
+    { extern void game_lod_undead(uint32_t); game_lod_undead(ecx); } /* LOD-TEST */
+recomp_0032.c:4746  in sub_00113D70
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x00113D70u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0032.c:4812  in sub_00113DB0
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x00113DB0u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0032.c:11400  in sub_00115B90
+    } } /* AI-SMOOTH */
+recomp_0032.c:11456  in sub_00115B90
+    { extern void game_smooth_cache(uint32_t, float); game_smooth_cache(esi, xmm2.f[0]); } /* AI-SMOOTH */
+recomp_0033.c:11786  in sub_00124270
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x00124270u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0033.c:11860  in sub_001242C0
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x001242C0u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0033.c:21604  in sub_001265F0
+    { extern void game_ai_tuning_loaded(void); game_ai_tuning_loaded(); } /* AI-TUNING */
+recomp_0033.c:22225  in sub_00127AF0
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x00127AF0u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0033.c:22466  in sub_00127BA0
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x00127BA0u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0033.c:22931  in sub_00127F20
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x00127F20u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0033.c:24563  in sub_001287D0
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x001287D0u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0034.c:476  in sub_00128F50
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x00128F50u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0034.c:668  in sub_00129000
+    { extern void game_ai_probe(uint32_t,uint32_t,uint32_t); game_ai_probe(0x00129000u, MEM32(esp), ecx); } /* AI-TUNING */
+recomp_0035.c:8434  in sub_001329A0
+    { extern void game_fx_placed(uint32_t); game_fx_placed(ecx); } /* SCREEN-FX dirt */
+recomp_0038.c:75  in None
+    extern int game_impact_cap(void); /* IMPACT-CAP */
+recomp_0038.c:76  in None
+    extern void game_impact_dbg(int stage, uint32_t a, uint32_t b, uint32_t c); /* IMPACT-DBG */
+recomp_0038.c:6597  in sub_001497B0
+    if (CMP_NE(_fa, _fb)) { game_impact_dbg(2, MEM32(ebp + 4), 0, 0); goto loc_00149991; } /* IMPACT-DBG */
+recomp_0038.c:6601  in sub_001497B0
+    game_impact_dbg(1, MEM32(ebp + 4), esi, MEM32(ebp + 0xC)); /* IMPACT-DBG */
+recomp_0038.c:6624  in sub_001497B0
+    if ((_fca > _fcb)) { game_impact_dbg(3, MEM32(ebp + 4), MEM32(esp + 0x30), MEM32(esp + 0x34)); goto loc_00149991; } /* IMPACT-DBG */
+recomp_0038.c:6652  in sub_001497B0
+    _fa = (uint32_t)(ecx) & 0xFFFFFFFFu; _fb = (uint32_t)(game_impact_cap()) & 0xFFFFFFFFu /* IMPACT-CAP was 3 */;
+recomp_0038.c:6655  in sub_001497B0
+    if (CMP_G(_fas, _fbs)) { game_impact_dbg(4, MEM32(ebp + 4), MEM32(eax), edx); goto loc_00149991; } /* IMPACT-DBG */
+recomp_0038.c:6658  in sub_001497B0
+    game_impact_dbg(5, MEM32(ebp + 4), MEM32(esi), MEM16(esi + 6)); /* IMPACT-DBG */
+recomp_0043.c:29598  in sub_00179100
+    { extern int game_movie_skip_pressed(void); if (game_movie_skip_pressed()) goto loc_00179187; } /* MOVIE-SKIP: a button ends the logo movie through the game's own skip exit (settings: Cutscenes) */
+recomp_0044.c:19622  in sub_00182050
+    { extern void game_spawn_log(uint32_t sp); game_spawn_log(esp); } /* GRENADE-PROBE */
+recomp_0044.c:23633  in sub_00183610
+    { extern void game_proj_tick(uint32_t self, uint32_t dtbits); game_proj_tick(L_ecx, MEM32(esp + 4)); } /* PROJ-PROBE */
+recomp_0044.c:24801  in sub_00183C90
+    } /* PROJ-PROBE, AI-AIM (diagnostics only with RECOMP_DIAG) */
+recomp_0048.c:19194  in sub_001AD4D0
+    PUSH32(esp, 1024); /* EMITTER-CAP: was 0x96 (150), temp snapshot list of all emitters */
+recomp_0049.c:1472  in sub_001B0AD0
+    PUSH32(esp, 1000); /* EMITTER-CAP: was 0x96 (150), see emitter_reap in game_patches.c */
+recomp_0049.c:1482  in sub_001B0AD0
+    PUSH32(esp, 1024); /* EMITTER-CAP: was 0xA0 (160) */
+recomp_0049.c:1636  in sub_001B0B00
+    _fa = (uint32_t)(MEM32(esi)) & 0xFFFFFFFFu; _fb = (uint32_t)(1000) & 0xFFFFFFFFu; /* EMITTER-CAP: was 0x96 */
+recomp_0079.c:7235  in sub_002CF850
+    { extern uint32_t game_playback_pool_bytes(void); PUSH32(esp, game_playback_pool_bytes()); } /* CORPSE-EXPERIMENT */
+recomp_0079.c:7273  in sub_002CF870
+    { extern uint32_t game_ragdoll_pool_bytes(void); PUSH32(esp, game_ragdoll_pool_bytes()); } /* CORPSE-EXPERIMENT */

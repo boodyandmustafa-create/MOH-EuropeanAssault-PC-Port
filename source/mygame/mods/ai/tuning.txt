@@ -1,0 +1,6 @@
+# Difficulty tuning. Remove the '#' in front of a line to turn it on. Restart the game.
+# أزل علامة '#' من أول السطر لتفعيله. أعد تشغيل اللعبة.
+#MaxHealth.All = 1000          # player max health on every difficulty (defaults 400 / 200 / 100 / 50)
+#MaxHealth.Hero = 200          # one difficulty only
+#Revives.All = 9               # starting revives (defaults 2 recruit/ 1 veteran/ 0 elite/ 0 hero, max 9)
+#EnemyCount = 3                 # TEST ON: multiplies spawner "MaxAlive" (1.5 / 2 / 3). 1 = off. Per level: EnemyCount.Elite = 2, EnemyCount.Hero = 2

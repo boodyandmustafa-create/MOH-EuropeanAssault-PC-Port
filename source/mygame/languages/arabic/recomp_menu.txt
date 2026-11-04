@@ -1,0 +1,187 @@
+#rtl
+# Recomp Settings screen: English text|Arabic text (UTF-8). One line per string the screen draws.
+RECOMP SETTINGS|إعدادات النسخة
+CONTROLS|التحكم
+KEYBOARD AND MOUSE|لوحة المفاتيح والفأرة
+GAMEPAD|ذراع التحكم
+Up / Down  select      Left / Right  change      B / Esc  back|أعلى / أسفل  اختيار      يسار / يمين  تغيير      B / Esc  رجوع
+[ Back ]|[ رجوع ]
+^ more above|^ المزيد في الأعلى
+v more below|v المزيد في الأسفل
+Esc: cancel      Delete: clear|Esc: إلغاء      Delete: مسح
+Enter / click: change    Insert: add another    Delete: clear    Left / Right: keyboard or gamepad|Enter / نقر: تغيير    Insert: إضافة آخر    Delete: مسح    يسار / يمين: لوحة المفاتيح أو الذراع
+Press a key or mouse button...|اضغط مفتاحاً أو زر الفأرة...
+Press a gamepad button...|اضغط زراً من الذراع...
+Menu language|لغة القائمة
+Field of view|مجال الرؤية
+Draw distance|مسافة الرسم
+Model detail|تفاصيل النماذج
+live; Higher and Highest draw more polygons at a distance, so they can cost frames|فوري؛ الأعلى يرسم مضلعات أكثر على المسافة، لذلك قد يكلّف إطارات
+Game|اللعبة
+Higher|أعلى
+Highest|الأعلى
+Fog distance|مسافة الضباب
+Anisotropic filtering|الترشيح متباين الخواص
+FXAA anti-aliasing|تنعيم الحواف FXAA
+Super Accuracy|الدقة الفائقة
+Blood amount|كمية الدم
+Blood colour|لون الدم
+Original|الأصلي
+Crimson|قرمزي
+Dark red|أحمر داكن
+Custom|مخصص
+Blood hue|درجة لون الدم
+Blood saturation|تشبّع لون الدم
+Blood brightness|سطوع لون الدم
+choose Custom first|اختر مخصص أولاً
+Blood duration|مدة بقاء الدم
+seconds the spray stays; Auto = by amount|ثوانٍ يبقى فيها الرذاذ؛ تلقائي = حسب الكمية
+Auto|تلقائي
+Keep corpses (experimental)|إبقاء الجثث (تجريبي)
+bodies that stay on the ground|الجثث التي تبقى على الأرض
+FPS counter|عداد الإطارات
+Screen blood|دم على الشاشة
+splatters on your view when an enemy is hit close|بقع دم على شاشتك عند إصابة عدو قريب
+Screen dirt|غبار وأتربة على الشاشة
+dust and dirt on your view when an explosion is near|غبار وأتربة على شاشتك عند انفجار قريب
+Screen rain|قطرات المطر على الشاشة
+Rain|المطر
+the game's own rain; Off = none, and the rows below are greyed out|المطر الذي في اللعبة نفسها؛ إيقاف = لا مطر، والصفوف أدناه معطّلة
+turn Rain on first|شغّل المطر أولاً
+raindrops on your view while you are out in the rain|قطرات مطر على شاشتك عندما تكون في العراء تحت المطر
+Rain amount|كمية المطر
+how much rain falls in the game (a rise applies at the next level load)|كمية المطر الساقط في اللعبة (الزيادة تُطبَّق عند تحميل المرحلة التالية)
+Rain size|حجم المطر
+size of the rain particles|حجم جسيمات المطر
+Rain speed|سرعة المطر
+how fast the rain falls|سرعة سقوط المطر
+Light|خفيف
+Heavy|غزير
+Storm|عاصفة
+Small|صغير
+Large|كبير
+Huge|ضخم
+Slow|بطيء
+Fast|سريع
+Very fast|سريع جداً
+next level load|عند تحميل المرحلة التالية
+Low|قليل
+High|كثير جداً
+Normal|عادي
+More|أكثر
+Lots|كثير
+Extreme|مفرط
+Mouse sensitivity|حساسية الفأرة
+Invert mouse Y|عكس محور الفأرة Y
+Cutscenes|المشاهد السينمائية
+Dump textures|تصدير الخامات
+Replaced textures|الخامات المبدلة
+Dump sounds (WAV)|تصدير الأصوات (WAV)
+Controls|عناصر التحكم
+Button prompts|أيقونات الأزرار
+Gamepad icons|أيقونات الذراع
+Sprint speed|سرعة الركض
+live; the yellow sprint bar above the adrenaline meter|فوري؛ شريط الركض الأصفر فوق مقياس الأدرينالين
+Stamina bar|شريط التحمل
+live; a countdown on screen from the moment a grenade is armed until it goes off|فوري؛ عدّاد تنازلي على الشاشة من لحظة تفعيل القنبلة حتى انفجارها
+Grenade timer|عدّاد القنبلة
+Show|إظهار
+Hide|إخفاء
+Sprint duration|مدة الركض
+Rest to recover|الراحة للتعافي
+Language|لغة اللعبة
+Frame rate|معدل الإطارات
+Resolution|الدقة
+Split-screen pads|أذرع الشاشة المنقسمة
+restart; keyboard and mouse = player 1, each gamepad = the next player|إعادة تشغيل؛ لوحة المفاتيح والفأرة = اللاعب 1، وكل ذراع = اللاعب التالي
+Fullscreen|ملء الشاشة
+Apply and restart|تطبيق وإعادة التشغيل
+live|فوري
+restart|إعادة تشغيل
+applies in a mission|يُطبَّق داخل المهمة
+Enter / Space / Esc / A / Start skips|Enter / Space / Esc / A / Start للتخطي
+restart; PNG or DDS; to mod textures; costs fps while on|إعادة تشغيل؛ PNG أو DDS؛ لتعديل الخامات؛ يخفض الإطارات أثناء التشغيل
+live: On shows your pictures, Off the game's own|فوري: تشغيل يعرض صورك، إيقاف يعرض الخامات الأصلية
+restart; saves sound effects to sound_dump|إعادة تشغيل؛ يحفظ المؤثرات الصوتية في sound_dump
+keyboard, mouse and gamepad|لوحة المفاتيح والفأرة والذراع
+which device the icons follow|الجهاز الذي تتبعه الأيقونات
+Xbox or PlayStation art|رسوم Xbox أو PlayStation
+seconds before tiring|ثوانٍ قبل التعب
+seconds to get it all back|ثوانٍ لاستعادة كل شيء
+restart; packs in the languages folder|إعادة تشغيل؛ الحزم في مجلد languages
+restarts the game|يعيد تشغيل اللعبة
+restart to apply|أعد التشغيل للتطبيق
+On|تشغيل
+Off|إيقاف
+Never show|عدم العرض
+Play, game's own skip|تشغيل، تخطي اللعبة نفسها
+Play, button skips|تشغيل، الزر يتخطى
+Gamepad|الذراع
+Keyboard|لوحة المفاتيح
+Auto (last used)|تلقائي (آخر مستخدم)
+Default|الافتراضية
+Arabic|العربية
+Press A / Enter|اضغط A / Enter
+Nothing to apply|لا شيء للتطبيق
+Open...|فتح...
+Move forward|تحرك للأمام
+Move backward|تحرك للخلف
+Strafe left|حركة جانبية يساراً
+Strafe right|حركة جانبية يميناً
+Jump / Stand up|قفز / وقوف
+Action / Reload|إجراء / إعادة تعبئة
+Crouch / Prone|انحناء / استلقاء
+Change weapon|تغيير السلاح
+Activate adrenaline|تفعيل الأدرينالين
+Use medkit|استخدام حقيبة الإسعاف
+Aim|تصويب
+Fire|إطلاق النار
+Grenade|قنبلة يدوية
+Recall squad|استدعاء الفرقة
+Position squad|تموضع الفرقة
+Melee|ضرب قريب
+Pause|إيقاف مؤقت
+Mission map|خريطة المهمة
+Sprint|ركض
+Reset all controls to the defaults|إعادة كل عناصر التحكم إلى الافتراضي
+Left stick|العصا اليسرى
+L3 (left stick)|L3 (العصا اليسرى)
+R3 (right stick)|R3 (العصا اليمنى)
+Menu|Menu
+View|View
+D-pad up|الأسهم: أعلى
+D-pad down|الأسهم: أسفل
+D-pad left|الأسهم: يسار
+D-pad right|الأسهم: يمين
+Mouse wheel|عجلة الفأرة
+Left mouse|زر الفأرة الأيسر
+Right mouse|زر الفأرة الأيمن
+Middle mouse|زر الفأرة الأوسط
+Mouse 4|زر الفأرة 4
+Mouse 5|زر الفأرة 5
+Left Shift|Shift الأيسر
+Right Shift|Shift الأيمن
+Left Ctrl|Ctrl الأيسر
+Right Ctrl|Ctrl الأيمن
+Left Alt|Alt الأيسر
+Right Alt|Alt الأيمن
+Space|مسافة
+Enter|Enter
+Esc|Esc
+Backspace|Backspace
+Up arrow|السهم الأعلى
+Down arrow|السهم الأسفل
+Left arrow|السهم الأيسر
+Right arrow|السهم الأيمن
+Enemy count (heavy)|عدد الأعداء (ثقيل)
+experimental; applies at the next mission load; x2 to x5 times the enemies that spawn points create (max x5). Heavy: costs frames, keep it low on a slower PC|تجريبي؛ يسري عند تحميل المهمة التالية؛ من x2 إلى x5 أضعاف الأعداء الذين تنتجهم نقاط الظهور (الحد x5). ثقيل: يكلّف إطارات، فاجعله منخفضاً على الجهاز الأضعف
+Enemy count applies to|يسري على
+which difficulties get the extra enemies|أي مستويات الصعوبة تحصل على الأعداء الإضافيين
+All difficulties|كل مستويات الصعوبة
+Elite and Hero only|النخبة والبطل فقط
+set Enemy count first|حدّد عدد الأعداء أولاً
+Enemy count: Recruit|عدد الأعداء: مبتدئ
+Enemy count: Veteran|عدد الأعداء: محترف
+Enemy count: Elite|عدد الأعداء: نخبة
+Enemy count: Hero|عدد الأعداء: بطل
+extra enemies on this difficulty|أعداء إضافيون على هذا المستوى

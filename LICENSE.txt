@@ -5,7 +5,9 @@ MEDAL OF HONOR: EUROPEAN ASSAULT - REMASTERED (PC PORT)  -  LICENSE
    port, the documentation) is a free, unofficial fan project. It is provided "AS IS", without warranty of any kind.
    You use it at your own risk.
 
-2. You may use and share this package for personal, NON-COMMERCIAL purposes, provided that it is shared
+2. The port's SOURCE CODE (the source\ folder of the project page) is under the MIT licence, see source\LICENSE-PORT.txt.
+   The rules below are for the ready-made download package. You may use and share that package for personal,
+   NON-COMMERCIAL purposes, provided that it is shared
    unchanged, complete, and with all credits and notices (README.md, LICENSE.txt, NOTICE.txt, SOURCE.txt).
    You may not sell it, or charge for access to it, or bundle it with the game's files.
 

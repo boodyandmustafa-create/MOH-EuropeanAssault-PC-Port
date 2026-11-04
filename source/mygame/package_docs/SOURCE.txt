@@ -1,0 +1,20 @@
+SOURCE CODE OF THE LGPL PARTS
+=============================
+
+MOHEuropeanAssault.exe contains code from the xemu project (GNU LGPL 2.1 or later), listed in NOTICE.txt. The source of
+those files - exactly as they were compiled into this release, including this port's own changes - is in the
+folder  source\xemu-derived\  of this package. The original project is at https://github.com/xemu-project/xemu .
+
+Our changes to those files:
+  apu_vp.c  - a guard that stops and restarts the software mix ring when it stalls (fixes sound that vanishes),
+              plus extra diagnostics.
+  nv2a_core.c, nv2a_regs.h, nv2a_state.h, apu_*.c/h, fpconv.h, apu.h - used as extracted by the xboxrecomp
+              toolkit (https://github.com/sp00nznet/xboxrecomp, MIT, which also carries the LGPL texts).
+
+Your rights under the LGPL: you may modify these files and use your modified version in place of ours. The rest
+of the program (the recompiled game and the port code) is not open source. If you want to relink a modified
+version of the LGPL files with the rest, open an issue on the project page and the object files needed for relinking
+will be provided:
+  https://github.com/boodyandmustafa-create/MOH-EuropeanAssault-PC-Port/issues
+
+The full licence text is in LICENSES\LGPL-2.1.txt.
