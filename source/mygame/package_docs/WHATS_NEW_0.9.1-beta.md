@@ -50,6 +50,11 @@ Gains depend on your PC; the busiest scenes gain the most. What changed inside:
 - **Rain master switch** — *Rain* (default **Off**); while it is off, the other four rain rows stay visible but greyed
   out. With it on, the default strength is Normal. Fog stays as the game has it.
 - **Screen rain** default is now Off in the shipped settings.
+- **Split-screen pads (experimental, local multiplayer)** — with it on, the keyboard and mouse control player 1 alone and
+  each gamepad drives the next player (game ports 2 to 4), so the game's own multiplayer menu can be used on one PC.
+  Not yet verified that every mode then shows a split view; there is no online or LAN play (the original has no
+  network code). Off by default; takes effect after a restart.
+- **Keep corpses (experimental, off)** — bodies stay on the ground. Soldiers may freeze or respawn doubled with it on.
 
 ### In-game menu and files
 
