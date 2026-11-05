@@ -52,7 +52,7 @@ recomp_0029.c:76  in None
 recomp_0029.c:77  in None
     extern int game_blood_every(void); /* BLOOD-EVERY */
 recomp_0029.c:3014  in sub_000F5180
-    { extern void game_wevent(uint32_t self, uint32_t ev); game_wevent(g_ecx, MEM32(esp + 4)); } /* RELOAD-PROBE */
+    { extern int game_wevent(uint32_t self, uint32_t ev, uint32_t sp); if (game_wevent(g_ecx, MEM32(esp + 4), esp)) { eax = 0; esp += 12; { RC_SYNC_OUT(); return; } } } /* RELOAD-PROBE + FIRE-RATE CAP (drops a too-early player shot event) */
 recomp_0029.c:3154  in sub_000F5180
     { extern void game_shot_fire(uint32_t m, uint32_t owner); game_shot_fire(eax, esi); } /* SHOT-PROBE */
 recomp_0029.c:12581  in sub_000F8C80

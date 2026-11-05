@@ -15,6 +15,9 @@ Press a gamepad button...|اضغط زراً من الذراع...
 Menu language|لغة القائمة
 Field of view|مجال الرؤية
 Draw distance|مسافة الرسم
+Automatic fire speed|سرعة الرمي الآلي
+live; how fast automatic guns (MP40, Thompson...) may fire. Fast = the game's own speed, which is quicker than intended above 30 fps|فوري؛ أقصى سرعة للأسلحة الآلية (MP40، تومسون...). سريع = سرعة اللعبة الأصلية وهي أسرع من المقصود فوق 30 إطاراً
+Slowest|الأبطأ
 Model detail|تفاصيل النماذج
 live; Higher and Highest draw more polygons at a distance, so they can cost frames|فوري؛ الأعلى يرسم مضلعات أكثر على المسافة، لذلك قد يكلّف إطارات
 Game|اللعبة

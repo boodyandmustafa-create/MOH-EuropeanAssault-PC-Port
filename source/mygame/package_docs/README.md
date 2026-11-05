@@ -1,6 +1,6 @@
 # Medal of Honor: European Assault — Remastered (PC port)
 
-**Version 0.9.1-beta** · Windows 10/11 64-bit · unofficial fan project
+**Version 0.9.2-beta** · Windows 10/11 64-bit · unofficial fan project
 
 A native Windows port of *Medal of Honor: European Assault* (Xbox, USA / NTSC-U), made by statically
 recompiling the game's own program (`DEFAULT.XBE`) to a PC executable. It is **not an emulator**.
@@ -8,6 +8,20 @@ recompiling the game's own program (`DEFAULT.XBE`) to a PC executable. It is **n
 
 > Not affiliated with, endorsed by or sponsored by Electronic Arts. *Medal of Honor* and *European Assault*
 > are trademarks of Electronic Arts Inc. See [NOTICE.txt](NOTICE.txt).
+
+## What's new in 0.9.2-beta
+
+A small fix release for three things players reported:
+
+- **Karabiner 98k now hits through the scope too.** 0.9.1 fixed hip fire; with the scope up the bullet still left the
+  barrel off the crosshair at high frame rates. Scoped shots now follow the camera exactly, like hip fire.
+- **Mouse wheel zooms the sniper scope.** While a scope is up, wheel up/down zooms in/out through the game's own zoom
+  steps, the same as the arrow keys and the pad's D-pad (those still work).
+- **Automatic fire speed** (new row in Recomp Settings and in the launcher): at 60 fps and above the MP40 and other
+  automatic weapons fired about 1.6 times faster than the game was played at 30 fps. Choose **Fast** (the game's own
+  speed at your frame rate), **Normal** (the 30 fps pace, the new default), **Slow** or **Slowest**. It only touches
+  automatic weapons, never the Karabiner or pistols. Known limit: the game fires its bullets in pairs, so the pace is
+  per pair.
 
 ## What's new in 0.9.1-beta
 
@@ -96,7 +110,7 @@ Gains depend on your PC; the busiest scenes gain the most. What changed inside:
 
 ### Other
 
-- The launcher shows version 0.9.1-beta and compares itself with the newest GitHub release.
+- The launcher shows version 0.9.2-beta and compares itself with the newest GitHub release.
 - The shipped `recomp_settings.ini` defaults: rain off, everything else as before.
 
 ## What you get
@@ -192,6 +206,19 @@ The source code (project page, folder source/) is MIT. This download package is 
 
 **ملاحظات:** 60 إطاراً/ثانية فقط مستقرة؛ ما فوقها مُعلَّم "غير مستقر". الترجمة العربية تجريبية وجزئية.
 
+## الجديد في 0.9.2-beta
+
+إصدار إصلاحات صغير لثلاث مشاكل أبلغ عنها اللاعبون:
+
+- **بندقية Karabiner 98k تصيب الآن بالمنظار أيضاً.** أصلحت 0.9.1 الرمي من الوسط، وبقيت الرصاصة مع المنظار تخرج بعيداً عن
+  المؤشر عند الإطارات العالية. صارت الطلقات بالمنظار تتبع الكاميرا بدقة كالرمي العادي.
+- **عجلة الماوس تقرّب وتبعّد منظار القناص.** أثناء المنظار تقرّب العجلة للأعلى وتبعّد للأسفل عبر خطوات التقريب الأصلية
+  في اللعبة، مثل أسهم لوحة المفاتيح وأزرار اليد (وهي ما زالت تعمل).
+- **سرعة الرمي الآلي** (صف جديد في Recomp Settings وفي المشغّل): من 60 إطاراً فما فوق كان MP40 وغيره من الأسلحة الآلية
+  يطلق أسرع بنحو 1.6 مرة مما لُعبت عليه اللعبة عند 30 إطاراً. اختر **Fast** (سرعة اللعبة نفسها)، أو **Normal** (إيقاع 30
+  إطاراً، وهو الافتراضي الجديد)، أو **Slow** أو **Slowest**. يؤثر على الأسلحة الآلية فقط، لا الكار ولا المسدسات. ملاحظة:
+  اللعبة تطلق رصاصها مزدوجاً، فالسرعة تُحسب لكل زوج.
+
 ## الجديد في 0.9.1-beta
 
 ### أسرع — بالقياس، على الجهاز نفسه وبالإعدادات نفسها
@@ -275,5 +302,5 @@ The source code (project page, folder source/) is MIT. This download package is 
 
 ### أخرى
 
-- يعرض المشغّل الإصدار 0.9.1-beta ويقارن نفسه بأحدث إصدار على GitHub.
+- يعرض المشغّل الإصدار 0.9.2-beta ويقارن نفسه بأحدث إصدار على GitHub.
 - القيم الافتراضية في `recomp_settings.ini` المشحون: المطر مطفأ، والباقي كما كان.

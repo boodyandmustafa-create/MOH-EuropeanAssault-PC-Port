@@ -575,6 +575,9 @@ static double fov_blend_span(void)
     return span > 400.0 ? 400.0 : span;
 }
 
+static float s_zoom_cur;            /* SCOPE ZOOM, defined below */
+static int scope_up(void);
+
 /* The game's fov for one call position -> the fov to use: eases jumps, then widens. */
 static float fov_step(FovRole *r, float a1, double now)
 {
@@ -605,11 +608,55 @@ static float fov_step(FovRole *r, float a1, double now)
         r->cur = a1;
     }
     a1 = r->cur;
+    if (s_zoom_cur != 1.0f && scope_up() && fabsf(r->to - s_fovrole[0].to) < 1.0f)
+        a1 = FOV_ATAN(FOV_TAN(a1) * s_zoom_cur);        /* SCOPE ZOOM */
     if (s_want_fov != 0.0f) {
         /* keep the zoom ratio against the 70 degree view: aiming and scopes widen with it */
         a1 = FOV_ATAN(FOV_TAN(a1) / FOV_TAN(70.0) * FOV_TAN(s_want_fov));
     }
     return a1;
+}
+
+/* The game's own world fov (degrees) of the last view update: about 70 normally, much smaller in a scope. */
+float game_view_fov_deg(void) { return s_fovrole[0].to; }
+
+/* SCOPE ZOOM (new in 0.9.1): while a scope is up (the game's world fov under 45 degrees) the mouse wheel / numpad + and -
+ * change the zoom on top of the game's own scope. s_zoom_tgt multiplies tan(half angle): 1 = the scope as the game made it,
+ * smaller = closer. Reset when the scope closes. The mouse turns slower in proportion (game_zoom_scale), so the picture
+ * moves the same on screen. Costs nothing: a few float operations per frame. */
+extern volatile LONG g_mkb_zoom_steps;
+static float s_zoom_tgt = 1.0f, s_zoom_cur = 1.0f;
+extern volatile int g_mkb_scoped;
+static int scope_up(void) { return s_fovrole[0].to > 1.0f && s_fovrole[0].to < 60.0f; }
+int game_scope_up(void) { return scope_up(); }
+float game_zoom_scale(void) { return scope_up() ? s_zoom_cur : 1.0f; }
+extern volatile unsigned g_mkb_last_btn;
+static void zoom_frame(void)
+{
+    LONG st = InterlockedExchange(&g_mkb_zoom_steps, 0);
+    g_mkb_scoped = scope_up();
+    {   /* ZOOMPROBE: while a scope is up, every change of the game's own fov with the pad / key state at that moment */
+        static float last;
+        static unsigned n;
+        float to = s_fovrole[0].to;
+        if (to > 1.0f && to < 45.0f && fabsf(to - last) > 0.05f && n < 300) {
+            n++;
+            fprintf(stderr, "[ZOOMPROBE] game fov %.2f -> %.2f buttons %06X\n", (double)last, (double)to, g_mkb_last_btn);
+        }
+        last = to;
+    }
+    if (!scope_up()) {
+        s_zoom_tgt = s_zoom_cur = 1.0f;
+        return;
+    }
+    if (st) {
+        s_zoom_tgt *= (float)pow(st > 0 ? 0.8 : 1.25, (double)(st > 0 ? st : -st));
+        s_zoom_tgt = s_zoom_tgt < 0.3f ? 0.3f : s_zoom_tgt > 1.6f ? 1.6f : s_zoom_tgt;
+    }
+    {
+        float k = (float)(s_frame_ms / 90.0);       /* about a tenth of a second to settle */
+        s_zoom_cur += (s_zoom_tgt - s_zoom_cur) * (k > 1.0f ? 1.0f : k);
+    }
 }
 
 static FovRole *fov_next_role(void)
@@ -621,6 +668,7 @@ static FovRole *fov_next_role(void)
         frame = g_game_frames;
         calls = 0;
         fov_frame_clock();
+        zoom_frame();
     }
     r = &s_fovrole[calls < FOV_ROLES ? calls : FOV_ROLES - 1];
     calls++;

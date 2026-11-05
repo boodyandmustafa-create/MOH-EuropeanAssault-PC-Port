@@ -374,6 +374,11 @@ static volatile unsigned char s_vk_tap[256];  /* pressed since the last poll */
 /* F6 / F7 while playing: -1 / +1 steps of the title's own field-of-view setting.
  * The title reads and clears it (mygame recomp_manual.c). */
 volatile LONG g_mkb_fov_steps;
+volatile unsigned g_mkb_last_btn;     /* ZOOMPROBE: the merged pad state of the last poll (buttons, bits 16-21 = analog A B X Y Black White, 22 LT, 23 RT) */
+volatile LONG g_mkb_zoom_steps;
+volatile unsigned g_mkb_rt_presses;   /* fire-rate gate: physical right-trigger presses */
+volatile double g_mkb_gate_until_ms;    /* fire-rate gate: trigger reads released until this QPC time (ms) */
+volatile int g_mkb_scoped;           /* set by the port while a scope is up (game fov under 60 degrees) */      /* scope zoom: wheel notches and numpad +/- in play (+ = zoom in); the port uses them only while a scope is up */
 volatile LONG g_mkb_fog_steps;          /* F2 / F3: fog distance multiplier down / up */
 volatile LONG g_mkb_draw_steps;         /* F4 / F5: draw distance multiplier down / up */
 volatile LONG g_mkb_pin_toggles;        /* F8: game loop on its own core on / off (mygame main.c) */
@@ -2152,6 +2157,18 @@ int mkb_merge(DWORD dwPort, XBOX_INPUT_STATE *pState)
         wheel = 0;
     }
 
+    {   /* the game's own scope zoom is the D-pad up / down: while a scope is up a wheel notch (up = in) is one press of it */
+        static DWORD z_until;
+        static WORD z_btn;
+        if (!in_menu && wheel && g_mkb_scoped) {
+            z_btn = wheel > 0 ? XBOX_GAMEPAD_DPAD_UP : XBOX_GAMEPAD_DPAD_DOWN;
+            z_until = GetTickCount() + 90;
+            wheel = 0;
+        }
+        if ((LONG)(z_until - GetTickCount()) > 0)
+            b |= z_btn;
+    }
+
     /* ---- mouse: aim ---- */
     if (dx || dy) {
         double ax =  (double)dx / (double)s_cfg.full;
@@ -2241,6 +2258,30 @@ int mkb_merge(DWORD dwPort, XBOX_INPUT_STATE *pState)
             pState->Gamepad.sThumbLY = mov_y;
         }
         any = 1;
+    }
+
+    {   /* FIRE-RATE gate: the port holds an automatic weapon's trigger released for a while after each bullet */
+        static int prev_raw;
+        int raw = pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] > 100;
+        if (raw && !prev_raw)
+            g_mkb_rt_presses++;
+        prev_raw = raw;
+        if (raw && g_mkb_gate_until_ms > 0.0) {
+            LARGE_INTEGER q, f;
+            QueryPerformanceCounter(&q);
+            QueryPerformanceFrequency(&f);
+            if (1000.0 * (double)q.QuadPart / (double)f.QuadPart < g_mkb_gate_until_ms) {
+                pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] = 0;
+                any = 1;
+            }
+        }
+    }
+
+    {
+        unsigned lb = pState->Gamepad.wButtons;
+        for (i = 0; i < 6; i++)
+            if (pState->Gamepad.bAnalogButtons[i] > 100) lb |= 1u << (16 + i);
+        g_mkb_last_btn = lb;
     }
 
     /* Edge detection: a title polling for changes ignores a state whose

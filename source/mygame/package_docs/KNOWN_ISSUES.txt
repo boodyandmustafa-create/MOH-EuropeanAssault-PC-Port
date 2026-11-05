@@ -1,4 +1,4 @@
-KNOWN ISSUES - 0.9.1-beta
+KNOWN ISSUES - 0.9.2-beta
 =========================
 
 * Only the USA / NTSC-U version of the game is supported (the launcher checks DEFAULT.XBE).

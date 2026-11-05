@@ -14,7 +14,7 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 TOOLKIT = os.path.join(ROOT, "xboxrecomp-0.16.0")
-VERSION = sys.argv[1] if len(sys.argv) > 1 else "0.9.1-beta"
+VERSION = sys.argv[1] if len(sys.argv) > 1 else "0.9.2-beta"
 NAME = "MOH-EuropeanAssault-PC-Port-" + VERSION
 OUT = os.path.join(ROOT, "release", NAME)
 DOCS = os.path.join(HERE, "package_docs")
@@ -136,7 +136,10 @@ def main():
     put(os.path.join(HERE, "mods", "sounds", "README.txt"), os.path.join("mods", "sounds", "README.txt"))
     put(os.path.join(HERE, "mods", "ai", "README.txt"), os.path.join("mods", "ai", "README.txt"))
     put(os.path.join(HERE, "mods", "ai", "tuning.txt"), os.path.join("mods", "ai", "tuning.txt"))
-    put_tree(os.path.join(HERE, "mods", "textures"), os.path.join("mods", "textures"))
+    # only the shipped set (README + the hi-res font atlases); the working folder also holds test replacements
+    for f in sorted(os.listdir(os.path.join(HERE, "mods", "textures"))):
+        if f == "README.txt" or f.endswith("_hd.png") or f == "4b5d093417bcbfdd_256x256_f0b.png":
+            put(os.path.join(HERE, "mods", "textures", f), os.path.join("mods", "textures", f))
     put_tree(os.path.join(HERE, "mods", "screenfx"), os.path.join("mods", "screenfx"))
     put_tree(os.path.join(HERE, "mods", "HDFont"), os.path.join("mods", "HDFont"))
     put_tree(os.path.join(HERE, "languages"), "languages")

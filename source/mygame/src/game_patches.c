@@ -1481,6 +1481,7 @@ loc_001AD6E4: ;
  * Off unless RECOMP_MKB is on and the game has the foreground; while it is
  * taking the mouse, the mouse no longer drives the emulated stick. */
 int mkb_native_aim_take(float *yaw, float *pitch);
+extern float game_zoom_scale(void);   /* recomp_manual.c: 1, or the scope zoom factor while zoomed (SCOPE ZOOM) */
 
 static float    s_aim_pitch;        /* taken with the yaw, for the pitch step */
 static uint32_t s_aim_this;         /* the character it was taken for */
@@ -1549,6 +1550,11 @@ static void aim_inject_yaw(void)
     s_aim_pitch = 0.0f;
     if (!mkb_native_aim_take(&dyaw, &dpitch))
         return;
+    {   /* SCOPE ZOOM: the more the scope is zoomed, the slower the mouse turns */
+        float zs = game_zoom_scale();
+        dyaw *= zs;
+        dpitch *= zs;
+    }
     s_aim_this = ecx;
     s_aim_pitch = dpitch;
     k = MEMF(ecx + 0x1C8) * MEMF(0x2FF020);
@@ -2852,26 +2858,69 @@ void game_shot_result(uint32_t r)
  * words that changed (at most 60 lines per word), to reload_probe_<time>.txt. Shows what a reload changes. */
 static FILE *rl_fp;
 static uint32_t rl_prev_p[0x200 / 4], rl_prev_w[0x300 / 4], rl_wobj;
-static unsigned char rl_cnt_p[0x200 / 4], rl_cnt_w[0x300 / 4];
+static unsigned short rl_cnt_p[0x200 / 4], rl_cnt_w[0x300 / 4];
+static unsigned rl_cap = 60, rl_line_cap = 40000;   /* RECOMP_RELOAD_PROBE=2: per word 3000 changes, 300000 lines (fire-rate hunt) */
+static double rl_ms(void) { LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f); return 1000.0 * (double)q.QuadPart / (double)f.QuadPart; }
 static unsigned rl_lines;
 static uint32_t rl_base;
-void game_wevent(uint32_t self, uint32_t ev)
+/* FIRE-RATE (new in 0.9.1): the game's own cooldown is frame-rate bound (the MP40 shoots every 41 ms from 60 fps up, 67 ms at
+ * 30 fps). The shot cadence is therefore held at the trigger: after each bullet of an AUTOMATIC weapon the right trigger
+ * reads released for the chosen number of ms (mkb_input.c), then the held button counts as a fresh press. A weapon is
+ * automatic when two of its bullets come < 100 ms apart without a new press. */
+static const int k_fire_gate[4] = { 0, 67, 90, 120 };    /* ms between an automatic weapon's shots: Fast (the game's own) / Normal (30 fps) / Slow / Slowest */      /* Fast (the game's own) / Normal (30 fps feel) / Slow / Slowest */
+static const char *const k_fire_name[4] = { "Fast", "Normal", "Slow", "Slowest" };
+static int s_fire_idx = -1;
+static void fire_idx_init(void)
+{
+    if (s_fire_idx < 0) {
+        const char *e = getenv("RECOMP_FIRE_CAP");
+        s_fire_idx = e && *e ? atoi(e) : 1;
+        if (s_fire_idx < 0 || s_fire_idx > 3)
+            s_fire_idx = 1;
+    }
+}
+int game_fire_get(void) { fire_idx_init(); return s_fire_idx; }
+void game_fire_set(int i) { fire_idx_init(); s_fire_idx = i < 0 ? 0 : i > 3 ? 3 : i; }
+const char *game_fire_name(int i) { return k_fire_name[i < 0 ? 0 : i > 3 ? 3 : i]; }
+
+static int fire_cap_skip(uint32_t self, uint32_t ev, uint32_t pc)
+{
+    (void)self; (void)ev; (void)pc;
+    return 0;
+}
+
+int game_wevent(uint32_t self, uint32_t ev, uint32_t sp)
 {
     extern uint32_t game_pc_get(void);
     uint32_t pc = game_pc_get();
-    int near_pc;
+    int near_pc, skip = fire_cap_skip(self, ev, pc);
+    if (ev == 49 && pc >= 0x80000000u && self == MEM32(pc + 0x1CC)) {   /* FIRE-CALLERS: who delivers the player's shot event */
+        static unsigned nfc;
+        if (nfc < 25) {
+            uint32_t k, v;
+            nfc++;
+            fprintf(stderr, "[FIRECALL] t %.3f ret %08X chain:", rl_ms(), MEM32(sp));
+            for (k = 4; k < 0x100; k += 4) {
+                v = MEM32(sp + k);
+                if (v > 0x10000u && v < 0x340000u)
+                    fprintf(stderr, " %08X", v);
+            }
+            fprintf(stderr, "\n");
+        }
+    }
     if (pc >= 0x80000000u && self == MEM32(pc + 0x1CC) && ev != 65 && ev != 4)   /* the player soldier's events, to tell a reload from a pin pull */
         fprintf(stderr, "[GRENTIMER] t %.2f player event %u (end=%.2f)\n", s_gt, (unsigned)ev, s_gren_end);
 
     if (!rl_fp)
-        return;
+        return skip;
     near_pc = pc && self + 0x3000u > pc && self < pc + 0x3000u;
     if (near_pc && MEM32(self + 0x1128) >= 0x80000000u)
         rl_base = self;
-    if (rl_lines < 40000) {
-        fprintf(rl_fp, "[RLP] t %u EVENT %u this %08X (pc%+d) near %d\n", (unsigned)GetTickCount(), (unsigned)ev, self, (int)(self - pc), near_pc);
+    if (rl_lines < rl_line_cap) {
+        fprintf(rl_fp, "[RLP] t %.3f EVENT %u this %08X (pc%+d) near %d\n", rl_ms(), (unsigned)ev, self, (int)(self - pc), near_pc);
         rl_lines++;
     }
+    return skip;
 }
 
 
@@ -2882,8 +2931,9 @@ void game_reload_poll(uint32_t pc)
     if (on < 0) {
         const char *e = getenv("RECOMP_RELOAD_PROBE");
         on = e && *e && *e != '0';
+        if (on && *e == '2') { rl_cap = 3000; rl_line_cap = 300000; }
     }
-    if (!on || pc < 0x80000000u || rl_lines > 40000)
+    if (!on || pc < 0x80000000u || rl_lines > rl_line_cap)
         return;
     if (!rl_fp) {
         char name[64];
@@ -2899,10 +2949,10 @@ void game_reload_poll(uint32_t pc)
         uint32_t v = MEM32(pc + 0x1100 + 4 * i);
         if (v != rl_prev_p[i]) {
             rl_prev_p[i] = v;
-            if (rl_cnt_p[i] < 60) {
+            if (rl_cnt_p[i] < rl_cap) {
                 float f; memcpy(&f, &v, 4);
                 rl_cnt_p[i]++;
-                fprintf(rl_fp, "[RLP] t %u step %g player+%X = %08X (%g)\n", (unsigned)GetTickCount(), (double)shot_f(0x373268), 0x1100 + 4 * i, v, (double)f);
+                fprintf(rl_fp, "[RLP] t %.3f step %g player+%X = %08X (%g)\n", rl_ms(), (double)shot_f(0x373268), 0x1100 + 4 * i, v, (double)f);
                 rl_lines++;
             }
         }
@@ -2941,10 +2991,10 @@ void game_reload_poll(uint32_t pc)
             uint32_t v = MEM32(wobj + 4 * i);
             if (v != rl_prev_w[i]) {
                 rl_prev_w[i] = v;
-                if (rl_cnt_w[i] < 60) {
+                if (rl_cnt_w[i] < rl_cap) {
                     float f; memcpy(&f, &v, 4);
                     rl_cnt_w[i]++;
-                    fprintf(rl_fp, "[RLP] t %u step %g weapon+%X = %08X (%g)\n", (unsigned)GetTickCount(), (double)shot_f(0x373268), 4 * i, v, (double)f);
+                    fprintf(rl_fp, "[RLP] t %.3f step %g weapon+%X = %08X (%g)\n", rl_ms(), (double)shot_f(0x373268), 4 * i, v, (double)f);
                     rl_lines++;
                 }
             }
@@ -2968,6 +3018,60 @@ static unsigned proj_made;
  * shows; at 144 the bullet rides about 2 degrees high and passes over targets at range. Measured in
  * shot_probe logs (2026-11-04). The direction is set to the 30 fps value at every frame rate (idempotent).
  * Only the player's bullets with muzzle speed above 6.5 (Karabiner 8). RECOMP_AIM_FIX=0 turns it off. */
+extern float game_view_fov_deg(void);               /* recomp_manual.c: the game's own world fov, degrees (70 = normal view, ~20 = scope) */
+int game_fire_get(void);
+static int aim_mode(void)
+{
+    static int m = -1;
+    if (m < 0) {
+        const char *e = getenv("RECOMP_AIM_MODE");
+        m = e && *e ? atoi(e) : 3;
+    }
+    return m;
+}
+
+static float s_dyaw;
+static void aimfix_log(int why, float spd, float ang, float np, float pitch, uint32_t pc)
+{
+    static unsigned lines;
+    if (lines >= 400)
+        return;
+    lines++;
+    fprintf(stderr, "[AIMFIX2] yaw110 %g diryaw %g ", (double)shot_f(pc + 0x110), (double)s_dyaw);
+    fprintf(stderr, "[AIMFIX2] why %d speed %g fov %.1f dirpitch %g -> %g pitch108 %g f13C %g f140 %g f144 %g f148 %g f14C %g step %g\n",
+            why, (double)spd, (double)game_view_fov_deg(), (double)ang, (double)np, (double)pitch, (double)shot_f(pc + 0x13C),
+            (double)shot_f(pc + 0x140), (double)shot_f(pc + 0x144), (double)shot_f(pc + 0x148), (double)shot_f(pc + 0x14C),
+            (double)shot_f(0x373268));
+}
+
+extern volatile unsigned g_mkb_rt_presses;
+extern volatile double g_mkb_gate_until_ms;
+static void fire_gate_note(uint32_t weapon, float spd)
+{
+    static uint32_t autow[8];
+    static unsigned nauto, last_press;
+    static double last_ms;
+    double now = rl_ms();
+    int i, is_auto = 0, ms;
+    if (spd >= 6.5f)
+        return;
+    if (!weapon)
+        weapon = 1;
+    for (i = 0; i < (int)nauto && i < 8; i++)
+        if (autow[i] == weapon)
+            is_auto = 1;
+    if (!is_auto && now - last_ms < 100.0 && g_mkb_rt_presses == last_press && nauto < 8) {
+        autow[nauto++] = weapon;
+        is_auto = 1;
+        fprintf(stderr, "[FIREGATE] weapon %08X is automatic\n", weapon);
+    }
+    last_ms = now;
+    last_press = g_mkb_rt_presses;
+    ms = k_fire_gate[game_fire_get()];
+    if (is_auto && ms > 0)
+        g_mkb_gate_until_ms = now + (double)ms;
+}
+
 void game_proj_fix(uint32_t sp)
 {
     static int on = -1;
@@ -2986,24 +3090,48 @@ void game_proj_fix(uint32_t sp)
         return;
     w = MEM32(sp + 0x18);
     memcpy(&spd, &w, 4);
+    {   uint32_t sol = MEM32(game_pc_val + 0x1CC);
+        fire_gate_note(sol >= 0x80000000u ? MEM32(sol + 0x1128) : 0, spd);
+    }
+    {   /* BULLET: when each of the player's projectiles is made (fire cadence), ms on a high-resolution clock */
+        static unsigned nb;
+        if (nb < 800) {
+            uint32_t pp = MEM32(sp + 0x10);
+            nb++;
+            fprintf(stderr, "[BULLET] t %.3f speed %g pos %g %g %g step %g fire %d\n", rl_ms(), (double)spd,
+                    pp >= 0x1000u ? (double)shot_f(pp) : 0.0, pp >= 0x1000u ? (double)shot_f(pp + 4) : 0.0,
+                    pp >= 0x1000u ? (double)shot_f(pp + 8) : 0.0, (double)shot_f(0x373268), game_fire_get());
+        }
+    }
     if (!(spd > 6.5f && spd < 50.0f))
         return;
     dir = MEM32(sp + 0x14);
-    if (dir < 0x1000u)
-        return;
+    if (dir < 0x1000u) { aimfix_log(1, spd, 0, 0, 0, game_pc_val); return; }
     nx = shot_f(dir); ny = shot_f(dir + 4); nz = shot_f(dir + 8);
     h = sqrtf(nx * nx + ny * ny);
-    if (h < 0.3f)
-        return;
+    s_dyaw = atan2f(ny, nx);
+    ang = asinf(nz);
     pitch = shot_f(game_pc_val + 0x108);
     kick = shot_f(game_pc_val + 0x14C);
-    if (!(kick >= 0.0f && kick < 0.5f) || !(pitch > -1.4f && pitch < 1.4f))
-        return;
-    np = pitch - kick;
-    ang = asinf(nz);
+    if (h < 0.3f) { aimfix_log(2, spd, ang, ang, pitch, game_pc_val); return; }
+    if (!(kick >= 0.0f && kick < 0.5f) || !(pitch > -1.4f && pitch < 1.4f)) { aimfix_log(3, spd, ang, ang, pitch, game_pc_val); return; }
+    {   /* mode 3 (default): in a scope the game's own direction carries a random sideways / up-down error four times the hip
+         * one (yaw 0.02 rad against 0.005, measured), so there the bullet leaves exactly along the camera, lowered by the kick */
+        extern int game_scope_up(void);
+        int m = aim_mode();
+        if (m == 2 || (m == 3 && game_scope_up())) {
+            float yaw = shot_f(game_pc_val + 0x110) + 1.5707963f, c0 = cosf(pitch - kick);
+            np = pitch - kick;
+            nx = c0 * cosf(yaw);
+            ny = c0 * sinf(yaw);
+            h = c0;
+        } else
+            np = ang - kick;
+    }
+    if (0)
+        np = ang - kick;            /* only the pending kick is added to the game's own direction; its own offset (larger in a scope) stays */
     /* sanity: only fix when the stored direction is near the camera pitch (within 0.25 rad) */
-    if (fabsf(ang - pitch) > 0.25f)
-        return;
+    if (fabsf(ang - pitch) > 0.25f) { aimfix_log(4, spd, ang, np, pitch, game_pc_val); return; }
     {
         float c = cosf(np), s = sinf(np), fx = nx / h, fy = ny / h;
         float ox = c * fx, oy = c * fy, oz = s;
@@ -3011,6 +3139,7 @@ void game_proj_fix(uint32_t sp)
         memcpy(&w, &oy, 4); MEM32(dir + 4) = w;
         memcpy(&w, &oz, 4); MEM32(dir + 8) = w;
     }
+    aimfix_log(0, spd, ang, np, pitch, game_pc_val);
     if (n++ < 20)
         fprintf(stderr, "[AIMFIX] bullet pitch %g -> %g (camera %g, kick %g)\n", (double)ang, (double)np, (double)pitch, (double)kick);
 }

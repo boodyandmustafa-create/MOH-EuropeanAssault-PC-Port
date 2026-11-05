@@ -44,7 +44,7 @@ using namespace Gdiplus;
 
 typedef std::wstring ws;
 
-static const wchar_t *LAUNCHER_VERSION = L"0.9.1-beta";
+static const wchar_t *LAUNCHER_VERSION = L"0.9.2-beta";
 /* SHA-256 of DEFAULT.XBE of the USA (NTSC-U) release. */
 static const char *USA_XBE_SHA256 = "5a34d7f3a38293178c34865dc60819b0796f17e1c7091722079cf075d33335e8";
 

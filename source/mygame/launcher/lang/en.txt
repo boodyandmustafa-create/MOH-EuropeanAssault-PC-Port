@@ -67,6 +67,12 @@ widescreen.d=Fills a widescreen monitor instead of the original 4:3 picture.
 @fov.d=Degrees. The original game uses 70.
 @draw=Object draw distance
 @draw.d=Times the game's own distance. Higher shows more far-away objects and costs frames.
+firecap=Automatic fire speed
+firecap.d=How fast automatic guns (MP40, Thompson...) may fire. Fast = the game's own speed, which is quicker than intended above 30 fps. Normal is close to the 30 fps feel; Slow and Slowest are slower still. Changes live from the in-game menu too.
+firecap.v.0=Fast
+firecap.v.1=Normal
+firecap.v.2=Slow
+firecap.v.3=Slowest
 lod=Model detail
 lod.d=How detailed each model is at a distance. Game = the game's own (default). Higher and Highest keep the detailed models out to a greater distance; they draw more polygons and can cost frames.
 lod.v.0=Game

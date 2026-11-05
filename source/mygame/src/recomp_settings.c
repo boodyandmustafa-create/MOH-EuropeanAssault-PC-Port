@@ -102,6 +102,9 @@ int  game_rain_on_get(void);
 void game_rain_on_set(int on);
 int    game_lod_get(void);
 void   game_lod_set(int idx);
+int    game_fire_get(void);
+void   game_fire_set(int idx);
+const char *game_fire_name(int idx);
 const char *game_lod_name(int idx);
 extern volatile int g_gpu_fxaa;
 int  mkb_get_icon_mode(void);
@@ -238,6 +241,7 @@ static void rs_save_known(FILE *f)
     fprintf(f, "screen_blood=%d\n", recomp_screenfx_get(0));
     fprintf(f, "screen_dirt=%d\n", recomp_screenfx_get(1));
     fprintf(f, "lod=%d\n", game_lod_get());
+    fprintf(f, "firecap=%d\n", game_fire_get());
     fprintf(f, "stamina_bar=%d\n", game_stambar_get());
     fprintf(f, "grenade_timer=%d\n", game_grentm_get());
     fprintf(f, "enemy_count=%d\n", game_ec_get());
@@ -346,6 +350,8 @@ void rs_startup(void)
             rs_putenv("RECOMP_SCREEN_BLOOD", line + 13);
         } else if (!strncmp(line, "screen_dirt=", 12)) {
             rs_putenv("RECOMP_SCREEN_DIRT", line + 12);
+        } else if (!strncmp(line, "firecap=", 8)) {
+            rs_putenv("RECOMP_FIRE_CAP", line + 8);
         } else if (!strncmp(line, "lod=", 4)) {
             rs_putenv("RECOMP_LOD", line + 4);
         } else if (!strncmp(line, "stamina_bar=", 12)) {
@@ -548,6 +554,8 @@ static void t_draw(char *o, size_t n) { snprintf(o, n, "x%.1f", game_draw_get())
 static void a_draw(int d)             { game_draw_set(game_draw_get() + 0.5f * (float)d); }
 static void t_lod(char *o, size_t n)  { snprintf(o, n, "%s", game_lod_name(game_lod_get())); }
 static void a_lod(int d)              { game_lod_set(game_lod_get() + d); }
+static void t_fire(char *o, size_t n) { snprintf(o, n, "%s", game_fire_name(game_fire_get())); }
+static void a_fire(int d)             { game_fire_set(game_fire_get() + d); }
 static void t_acc(char *o, size_t n)  { snprintf(o, n, "%s", game_super_accuracy_get() ? "On" : "Off"); }
 static void a_acc(int d)              { (void)d; game_super_accuracy_set(!game_super_accuracy_get()); }
 static void t_blood(char *o, size_t n) { snprintf(o, n, "%s", game_blood_name(game_blood_get())); }
@@ -712,6 +720,7 @@ static const RsRow k_rows[] = {
     { "Menu language",       "live",             t_mlang, a_mlang, NULL },
     { "Field of view",       "live",             t_fov,  a_fov,  NULL   },
     { "Draw distance",       "live",             t_draw, a_draw, NULL   },
+    { "Automatic fire speed", "live; how fast automatic guns (MP40, Thompson...) may fire. Fast = the game's own speed, which is quicker than intended above 30 fps", t_fire, a_fire, NULL },
     { "Model detail",        "live; Higher and Highest draw more polygons at a distance, so they can cost frames", t_lod, a_lod, NULL },
     { "Fog distance",        "live",             t_fog,  a_fog,  NULL   },
     { "Anisotropic filtering", "live",           t_aniso, a_aniso, NULL },
