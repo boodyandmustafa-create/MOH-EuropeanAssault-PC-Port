@@ -57,12 +57,17 @@ Gains depend on your PC; the busiest scenes gain the most. What changed inside:
   rows and a colour square. The on-screen splatters keep their own colour.
 - **Model detail** (level of detail for every model by distance): Game (the original) / Higher / Highest. Higher and
   Highest draw the better models farther away, so they can cost frames.
-- **Replaced textures** — On/Off **while playing**, to compare the game's pictures with yours instantly.
+- **Replaced textures** — On/Off **while playing**, to compare the game's pictures with yours instantly. Press **F9** to switch it without opening the menu.
 - **Dump textures** is now Off / PNG / **DDS**. DDS replacements are read by the port itself (uncompressed 24/32-bit
   and DXT1/3/5, old or DX10 header).
 - **Rain master switch** — *Rain* (default **Off**); while it is off, the other four rain rows stay visible but greyed
   out. With it on, the default strength is Normal. Fog stays as the game has it.
 - **Screen rain** default is now Off in the shipped settings.
+- **Split-screen pads (experimental, local multiplayer)** — with it on, the keyboard and mouse control player 1 alone and
+  each gamepad drives the next player (game ports 2 to 4), so the game's own multiplayer menu can be used on one PC.
+  Not yet verified that every mode then shows a split view; there is no online or LAN play (the original has no
+  network code). Off by default; takes effect after a restart.
+- **Keep corpses (experimental, off)** — bodies stay on the ground. Soldiers may freeze or respawn doubled with it on.
 
 ### In-game menu and files
 
@@ -131,7 +136,7 @@ You can also start `MOHEuropeanAssault.exe` directly: it reads the same `recomp_
 
 Everything is in the launcher (Game, Controls, Mods, Extras, Advanced tabs) and also inside the game:
 *Options → Credits* opens the **Recomp Settings** screen (`F1` opens it from any menu). `F11` / `Alt+Enter`
-toggle fullscreen and `F12` saves a screenshot to `screenshots\`. A fresh package starts at 60 fps with the
+toggle fullscreen, `F9` turns replaced textures On/Off, and `F12` saves a screenshot to `screenshots\`. A fresh package starts at 60 fps with the
 picture size taken from your screen; the launcher's *Game* tab has two presets (Balanced / High performance).
 
 ## Mods
@@ -238,6 +243,11 @@ The source code (project page, folder source/) is MIT. This download package is 
 - **مفتاح المطر الرئيسي** — *المطر* (الافتراضي **مطفأ**)؛ ما دام مطفأً تبقى صفوف المطر الأربعة الأخرى ظاهرة لكن
   معطّلة. عند تشغيله القوة الافتراضية «عادي». الضباب كما هو في اللعبة.
 - **مطر الشاشة** صار مطفأً افتراضياً في الإعدادات المشحونة.
+- **أذرع اللعب المنفصلة (تجريبي، لعب محلي لأكثر من لاعب)** — عند تشغيله تتحكم لوحة المفاتيح والفأرة باللاعب الأول وحده،
+  وكل ذراع تتحكم باللاعب التالي (المنافذ 2 إلى 4)، فتعمل قائمة اللعب الجماعي الأصلية على جهاز واحد. لم يُتحقق بعد أن كل
+  الأوضاع تعرض شاشة مقسومة؛ ولا يوجد لعب عبر الشبكة أو الإنترنت (اللعبة الأصلية بلا كود شبكة). مطفأ افتراضياً ويسري
+  بعد إعادة التشغيل.
+- **إبقاء الجثث (تجريبي، مطفأ)** — تبقى الجثث على الأرض. قد يتجمد الجنود أو يظهرون مضاعفين عند تشغيله.
 
 ### القائمة داخل اللعبة والملفات
 

@@ -44,7 +44,7 @@ Gains depend on your PC; the busiest scenes gain the most. What changed inside:
   rows and a colour square. The on-screen splatters keep their own colour.
 - **Model detail** (level of detail for every model by distance): Game (the original) / Higher / Highest. Higher and
   Highest draw the better models farther away, so they can cost frames.
-- **Replaced textures** — On/Off **while playing**, to compare the game's pictures with yours instantly.
+- **Replaced textures** — On/Off **while playing**, to compare the game's pictures with yours instantly. Press **F9** to switch it without opening the menu.
 - **Dump textures** is now Off / PNG / **DDS**. DDS replacements are read by the port itself (uncompressed 24/32-bit
   and DXT1/3/5, old or DX10 header).
 - **Rain master switch** — *Rain* (default **Off**); while it is off, the other four rain rows stay visible but greyed

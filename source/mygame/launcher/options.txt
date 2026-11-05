@@ -27,6 +27,7 @@ game|lod|choice|0|0,1,2
 game|fog|choice|2.0|1.0,1.5,2.0,3.0,4.0
 game|aniso|choice|16|1,2,4,8,16
 game|fxaa|toggle|1|
+game|reshade|toggle|1|
 game|language|lang|english|
 game|cutscenes|choice|skip|play,skip,off
 game|fps_counter|toggle|0|

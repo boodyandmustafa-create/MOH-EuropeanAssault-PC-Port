@@ -380,6 +380,14 @@ static void LoadIni()
         }
         if (o.type != L"toggle" && FindIdx(o, o.cur) < 0) o.vals.push_back(o.cur);
     }
+    {   /* ReShade add-on: dxgi.dll = on, dxgi.dll.off = off. The row only exists when the add-on is installed. */
+        bool rsOn = Exists(g_dir + L"dxgi.dll"), rsOff = Exists(g_dir + L"dxgi.dll.off");
+        if (!rsOn && !rsOff) {
+            g_opts.erase(std::remove_if(g_opts.begin(), g_opts.end(), [](const Opt &o) { return o.key == L"reshade"; }), g_opts.end());
+        } else if (Opt *r = OptByKey(L"reshade")) {
+            r->cur = rsOn ? L"1" : L"0";
+        }
+    }
     if (Opt *lg = OptByKey(L"language")) g_langAtLoad = lg->cur;
     if (IniGet("first_run", v) && atoi(v.c_str()) != 0) {      /* the shipped defaults are modest; the picture size follows this screen */
         g_firstRun = true;
@@ -420,8 +428,14 @@ static void SaveIni()
         }
         if (moved) IniSet("move", To8(mv[0] + L"," + mv[1] + L"," + mv[2] + L"," + mv[3])); else IniErase("move");
     }
+    if (Opt *r = OptByKey(L"reshade")) {        /* switch the add-on by renaming its proxy dll (fails quietly while the game runs) */
+        ws on = g_dir + L"dxgi.dll", off = g_dir + L"dxgi.dll.off";
+        if (r->cur == L"1" && !Exists(on) && Exists(off)) MoveFileW(off.c_str(), on.c_str());
+        else if (r->cur != L"1" && Exists(on)) MoveFileExW(on.c_str(), off.c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
     for (auto &o : g_opts) {
         if (o.type == L"action" || o.type == L"link" || o.type == L"note" || o.type == L"bind" || o.type == L"movekey") continue;
+        if (o.key == L"reshade") continue;
         if (o.key[0] == L'@') {
             ws f = o.key == L"@fov" ? L"fov_saved.txt" : L"draw_saved.txt";
             WriteAll(g_dir + f, To8(o.cur) + "\n");
@@ -1507,7 +1521,7 @@ static void PadStep(Opt &o, int d)
 static void BindKey(const ws &id)
 {
     if (g_cap < 0 || g_cap >= (int)g_opts.size()) { g_cap = -1; return; }
-    if (id == L"f1" || id == L"f11" || id == L"f12") { Toast(T(L"key.reserved")); return; }   /* settings / fullscreen / screenshot */
+    if (id == L"f1" || id == L"f9" || id == L"f11" || id == L"f12") { Toast(T(L"key.reserved")); return; }   /* settings / fullscreen / screenshot */
     Opt &o = g_opts[g_cap];
     if (o.type == L"movekey") {
         if (id.size() == 1 || id.size() >= 3) o.cur = id;     /* movement keys are keyboard keys, not the mouse */

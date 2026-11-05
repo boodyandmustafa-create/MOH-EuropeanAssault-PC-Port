@@ -53,6 +53,7 @@ void   game_blood_bright_set(int v);
 void   game_blood_custom_rgb(int rgb[3]);
 int    texdec_texmod_get(void);
 void   texdec_texmod_set(int on);
+extern void recomp_osd_show(const char *msg);
 int    game_rain_cfg_get(int which);
 void   game_rain_cfg_set(int which, int lv);
 const char *game_rain_cfg_name(int which, int lv);
@@ -1043,7 +1044,7 @@ static void ct_assign_key(unsigned code)
 {
     int r = s_csel, n, i;
     unsigned short ks[4];
-    if (code == VK_F12 || code == VK_F1 || code == VK_F11) {     /* screenshot / Recomp Settings / fullscreen keys */
+    if (code == VK_F12 || code == VK_F1 || code == VK_F11 || code == VK_F9) {     /* screenshot / Recomp Settings / fullscreen / textures keys */
         s_cap = 0;
         InvalidateRect(s_hwnd, NULL, FALSE);
         return;
@@ -2055,13 +2056,13 @@ static DWORD WINAPI rs_hotkey_thread(LPVOID unused)
 {
     HMODULE xm = LoadLibraryA("xinput1_4.dll");
     RsXGet get = xm ? (RsXGet)GetProcAddress(xm, "XInputGetState") : NULL;
-    int prev_y = 0, prev_f1 = 0;
+    int prev_y = 0, prev_f1 = 0, prev_f9 = 0;
     (void)unused;
     for (;;) {
-        int f1, y = 0, menu;
+        int f1, f9, y = 0, menu;
         Sleep(30);
         if (s_open || !rs_game_in_front()) {
-            prev_y = prev_f1 = 1;           /* a key held while this was up is not a press */
+            prev_y = prev_f1 = prev_f9 = 1; /* a key held while this was up is not a press */
             continue;
         }
         menu = g_xbox_mem_offset && *(const volatile unsigned char *)((uintptr_t)g_xbox_mem_offset + 0x378964u) == 1;
@@ -2073,6 +2074,13 @@ static DWORD WINAPI rs_hotkey_thread(LPVOID unused)
         }
         if ((f1 && !prev_f1) || (menu && y && !prev_y))
             rs_open(0, f1, f1 ? (menu ? "F1 in a menu" : "F1 in play") : "Y on a pause screen");
+        f9 = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;                     /* replaced textures On/Off, same as the settings row */
+        if (f9 && !prev_f9) {
+            texdec_texmod_set(!texdec_texmod_get());
+            recomp_osd_show(texdec_texmod_get() ? "Replaced textures: On  (F9)" : "Replaced textures: Off  (F9)");
+            rs_save();
+        }
+        prev_f9 = f9;
         prev_f1 = f1;
         prev_y = y;
     }

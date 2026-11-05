@@ -18,6 +18,7 @@ VERSION = sys.argv[1] if len(sys.argv) > 1 else "0.9.1-beta"
 NAME = "MOH-EuropeanAssault-PC-Port-" + VERSION
 OUT = os.path.join(ROOT, "release", NAME)
 DOCS = os.path.join(HERE, "package_docs")
+KEEP_LOCAL = ("game", "xboxdata", "shader_cache", "screenshots", "play_log.txt", "play_log_prev.txt")
 
 XEMU_FILES = [
     "src/apu/apu.h", "src/apu/apu_core.c", "src/apu/apu_dsp.c", "src/apu/apu_vp.c", "src/apu/apu_regs.h",
@@ -58,17 +59,64 @@ def default_ini():
                 fov = dflt
             elif key == "@draw":
                 draw = dflt
-            elif typ in ("choice", "toggle", "lang") and not key.startswith("@"):
+            elif typ in ("choice", "toggle", "lang") and not key.startswith("@") and key != "reshade":
                 lines.append("%s=%s" % (key, dflt))
     # first_run=1: the launcher picks the picture size from the monitor once, then removes the line
     lines += ["menu_lang=english", "launcher_lang=en", "launcher_music=1", "first_run=1"]
     return "\r\n".join(lines) + "\r\n", fov, draw
 
 
+def make_reshade_addon():
+    """Optional add-on zip: ReShade (proxy dxgi.dll) + shaders + a light default preset. Unzipped next to
+    MOHEuropeanAssault.exe; the launcher then shows a ReShade switch. Nothing of the private folder's own settings goes in."""
+    rs_dir = os.path.join(HERE, "reshade-shaders")
+    dll = os.path.join(HERE, "dxgi.dll")
+    if not (os.path.isdir(rs_dir) and os.path.isfile(dll)):
+        print("reshade add-on skipped (dxgi.dll or reshade-shaders missing)")
+        return
+    zpath = os.path.join(ROOT, "release", "MOH-ReShade-Addon-" + VERSION + ".zip")
+    if os.path.exists(zpath):
+        os.remove(zpath)
+    # ReShade.ini without this machine's paths, window layout and tutorial state
+    drop = ("IntermediateCachePath=", "Docking=", "Window=", "ShowFPS=", "FPSPosition=")
+    ini = []
+    with open(os.path.join(HERE, "ReShade.ini"), encoding="utf-8", errors="replace") as f:
+        for l in f.read().splitlines():
+            if not l.startswith(drop):
+                ini.append(l)
+    ini_text = "\r\n".join(ini) + "\r\n"
+    # the default preset is the author's own tuned ReShadePreset.ini (AdaptiveSharpen, Colourfulness, MagicHDR, Unsharp)
+    with open(os.path.join(HERE, "ReShadePreset.ini"), encoding="utf-8", errors="replace") as f:
+        preset = "\r\n".join(f.read().splitlines()) + "\r\n"
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        z.write(dll, "dxgi.dll")
+        z.writestr("ReShade.ini", ini_text)
+        z.writestr("ReShadePreset.ini", preset)
+        z.write(os.path.join(DOCS, "README_RESHADE.txt"), "README_RESHADE.txt")
+        z.write(os.path.join(DOCS, "LICENSE_RESHADE.txt"), "LICENSES/ReShade-BSD-3-Clause.txt")
+        for dp, dn, fn in os.walk(rs_dir):
+            for f in sorted(fn):
+                full = os.path.join(dp, f)
+                z.write(full, os.path.join("reshade-shaders", os.path.relpath(full, rs_dir)))
+    h = hashlib.sha256()
+    with open(zpath, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    with open(zpath + ".sha256", "w") as f:
+        f.write("%s  %s\n" % (h.hexdigest(), os.path.basename(zpath)))
+    print("reshade:", zpath, "%.1f MB" % (os.path.getsize(zpath) / 1e6))
+
+
 def main():
+    # A tester may be running this very folder with his own game files in game\ (and its logs, caches and saves): never
+    # delete those, and never zip them (see KEEP_LOCAL and the zip loop).
     if os.path.isdir(OUT):
-        shutil.rmtree(OUT)
-    os.makedirs(OUT)
+        for name in os.listdir(OUT):
+            if name in KEEP_LOCAL:
+                continue
+            full = os.path.join(OUT, name)
+            shutil.rmtree(full) if os.path.isdir(full) else os.remove(full)
+    os.makedirs(OUT, exist_ok=True)
 
     put(os.path.join(HERE, "MOHEuropeanAssault.exe"), "MOHEuropeanAssault.exe")
     put(os.path.join(HERE, "Launcher.exe"), "Launcher.exe")
@@ -127,6 +175,9 @@ def main():
         for dp, dn, fn in os.walk(OUT):
             for f in sorted(fn):
                 full = os.path.join(dp, f)
+                rel = os.path.relpath(full, OUT).replace("\\", "/")
+                if rel != "game/README.txt" and rel.split("/")[0] in KEEP_LOCAL:
+                    continue
                 z.write(full, os.path.join(NAME, os.path.relpath(full, OUT)))
         z.writestr(zipfile.ZipInfo(NAME + "/game/"), "")      # the folder stays even when empty-looking
     h = hashlib.sha256()
@@ -139,6 +190,7 @@ def main():
     print("package:", OUT, "%.1f MB" % (total / 1e6))
     print("zip    :", zpath, "%.1f MB" % (os.path.getsize(zpath) / 1e6))
     print("sha256 :", h.hexdigest())
+    make_reshade_addon()
 
 
 main()
