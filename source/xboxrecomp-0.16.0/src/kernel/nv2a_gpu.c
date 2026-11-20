@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "../d3d/d3d8_swizzle.h"
 
 extern ptrdiff_t xbox_GetMemoryOffset(void);
@@ -72,6 +73,228 @@ static double now_ms(void)
 
 #define GPU_VB_BYTES (8u << 20)
 
+/* ---- WEAPON LIGHTING (nv2a_gpu.h) ---------------------------------------------------------------------------------------------
+ * The first-person weapon's opaque draws run their normal combiner shader and then wpn_post() below, which adds
+ *   - a view-space normal from the screen derivatives of the position rebuilt from SV_Position (w = 1/view depth) and a bump
+ *     from the screen derivatives of a height made of the picture's own luminance (the game has no normal maps), plus the
+ *     height of the rain drops;
+ *   - environment light: a 256x144 mip copy of the last presented frame (t4): a colour cast from its average, and a reflection
+ *     looked up by the reflected view ray as a screen position (rays pointing behind the camera fall back to the average);
+ *   - dust, blood and rain drops, made in the shader (value noise and a drop grid in the texture's own coordinates), their
+ *     amounts coming from the game side (explosions / hits near the player, rain) in the WPN constants (b5).
+ * Cached shader variants carry WPN_VERSION in their key: bump it whenever k_wpn_hlsl changes. */
+#define WPN_VERSION 10u
+static const char k_wpn_hlsl[] =
+"cbuffer WPN : register(b5) {\n"
+"  float4 wp0;     /* x strength, y tan(half fov) across, z tan(half fov) down, w seconds */\n"
+"  float4 wp1;     /* x dust, y unused, z wet (rain), w environment copy valid */\n"
+"  float4 wp2;     /* rgb blood colour, w pattern seed */\n"
+"  float4 wp3;     /* x render target width, y height, zw where the gun sits on the screen now (view units: the patterns follow it) */\n"
+"  float4 bl[8];   /* blood events: x, y centre, z size, w age in seconds (negative: unused) */\n"
+"  float4 bs[8];   /* blood events: x seed, y strength */\n"
+"  float4 wl0;     /* xyz direction to the light (view space, x right, y up, z forward), w how directional it is, 0..1 */\n"
+"  float4 wl1;     /* rgb colour of the light */\n"
+"};\n"
+"Texture2D txe : register(t4);\n"
+"SamplerState sme : register(s4);\n"
+"float wh21(float2 p) { float3 q = frac(float3(p.x, p.y, p.x) * 0.1031); q += dot(q, q.yzx + 33.33); return frac((q.x + q.y) * q.z); }\n"
+"float wvn(float2 p) { float2 i = floor(p), f = frac(p); f = f * f * (3.0 - 2.0 * f);\n"
+"  return lerp(lerp(wh21(i), wh21(i + float2(1, 0)), f.x), lerp(wh21(i + float2(0, 1)), wh21(i + float2(1, 1)), f.x), f.y); }\n"
+"float wfbm(float2 p) { return 0.5 * wvn(p) + 0.25 * wvn(p * 2.03 + 7.1) + 0.125 * wvn(p * 4.11 + 3.7); }\n"
+"float wseg(float2 p, float2 a, float2 b) { float2 pa = p - a, ba = b - a; float h = saturate(dot(pa, ba) / max(dot(ba, ba), 1e-6)); return length(pa - ba * h); }\n"
+"/* water on the weapon: coverage, dark rim, and the surface tilt of the drops (view space x right, y up) */\n"
+"struct WAcc { float cov; float ring; float2 tilt; };\n"
+"void wdrop(float2 p, float2 c, float r, inout WAcc a) {\n"
+"  float2 d = p - c; float k = length(d) / max(r, 1e-5);\n"
+"  if (k < 1.0) {\n"
+"    float m = smoothstep(1.0, 0.8, k);\n"
+"    a.cov = max(a.cov, m); a.ring = max(a.ring, m * smoothstep(0.45, 1.0, k)); a.tilt += d / max(r, 1e-5) * 1.1 * m;\n"
+"  }\n"
+"}\n"
+"/* beads: one per 16 mm cell, each with its own cycle (they swell, hold, creep down a little, shrink); wetter = more cells have one */\n"
+"void wbeads(float2 p, float t, float wet, inout WAcc a) {\n"
+"  float cs = 0.016; float2 id = floor(p / cs);\n"
+"  [unroll] for (int j = -1; j <= 1; j++) {\n"
+"    [unroll] for (int i = -1; i <= 1; i++) {\n"
+"      float2 cell = id + float2(i, j);\n"
+"      float3 n = float3(wh21(cell), wh21(cell + 7.7), wh21(cell + 19.3));\n"
+"      if (n.x > wet * 0.8) continue;\n"
+"      float ph = frac(t / (18.0 + 22.0 * n.y) + n.z);\n"
+"      float life = smoothstep(0.0, 0.15, ph) * (1.0 - smoothstep(0.8, 1.0, ph));\n"
+"      float rad = (0.0013 + 0.0022 * n.y * n.y) * life;\n"
+"      float2 c = (cell + 0.5 + (float2(wh21(cell + 3.1), wh21(cell + 11.9)) - 0.5) * 0.6) * cs;\n"
+"      c.y -= smoothstep(0.55, 0.8, ph) * n.y * 0.5 * cs * step(0.5, n.z);\n"
+"      wdrop(p, c, rad, a);\n"
+"    }\n"
+"  }\n"
+"}\n"
+"/* runners: in 20 mm columns, three slots each: a drop that swells, then slides down in jerks (stick and slip), leaving a thin wet trail */\n"
+"void wrunners(float2 p, float t, float wet, inout WAcc a) {\n"
+"  float cw = 0.020; float cx = floor(p.x / cw);\n"
+"  [unroll] for (int i = -1; i <= 1; i++) {\n"
+"    float col = cx + i;\n"
+"    [unroll] for (int j = 0; j < 3; j++) {\n"
+"      float jj = j * 3.7;\n"
+"      float4 n = float4(wh21(float2(col, jj)), wh21(float2(col + 5.1, jj + 1.3)), wh21(float2(col + 9.7, jj + 2.9)), wh21(float2(col + 13.3, jj + 4.1)));\n"
+"      if (n.x > wet * 0.55) continue;\n"
+"      float u = frac(t / (7.0 + 9.0 * n.y) + n.z);\n"
+"      float y0 = 0.05 - 0.35 * n.w;\n"
+"      float L = 0.06 + 0.14 * n.y;\n"
+"      float sp = u * 4.0;\n"
+"      float s = L * (floor(sp) + smoothstep(0.55, 1.0, frac(sp))) * 0.25;\n"
+"      float yc = y0 - s;\n"
+"      float xc = (col + 0.5 + (n.w - 0.5) * 0.5 + 0.1 * sin(s * 70.0 + n.z * 6.28)) * cw;\n"
+"      float fade = 1.0 - smoothstep(0.9, 1.0, u);\n"
+"      float r = (0.0026 + 0.0014 * n.z) * smoothstep(0.0, 0.08, u) * fade;\n"
+"      wdrop(p, float2(xc, yc), r, a);\n"
+"      if (p.y > yc && p.y < y0 && s > 0.004) {\n"
+"        float along = (p.y - yc) / s;\n"
+"        float w = 0.0009 * (1.0 - 0.6 * along);\n"
+"        float m = smoothstep(w, w * 0.3, abs(p.x - xc)) * (1.0 - along * 0.7) * 0.55 * fade;\n"
+"        a.cov = max(a.cov, m * 0.5);\n"
+"        a.tilt.x += (p.x - xc) / max(w, 1e-5) * 0.35 * m;\n"
+"      }\n"
+"    }\n"
+"  }\n"
+"}\n"
+"/* one blood event (a hit): an irregular blob and a spray of spots round it, thinning outward; the bigger spots creep down as it ages\n"
+"   and the whole thing goes from bright red and wet to dark and dull, then fades. bw / bf: weights for the average freshness */\n"
+"void wblood(float2 p, float2 c, float4 e, float2 sd, float2 gdir, inout float bcov, inout float bw, inout float bf, inout float2 bt) {\n"
+"  if (e.w < 0.0) return;\n"
+"  float2 r = (p - c) / max(e.z, 1e-4);\n"
+"  float rr = length(r);\n"
+"  if (rr > 1.3) return;\n"
+"  float age = e.w;\n"
+"  float fresh = 1.0 - smoothstep(4.0, 70.0, age);\n"
+"  float life = 1.0 - smoothstep(110.0, 190.0, age);\n"
+"  float nz = wfbm(r * 3.5 + sd.x * 13.0);\n"
+"  float R = 0.08 + 0.10 * sd.y;\n"
+"  float cov = smoothstep(R, R * 0.8, rr * (0.75 + nz * 0.7));\n"
+"  float2 tl = 0;\n"
+"  float2 g = r * 7.0 + sd.x * 37.0;\n"
+"  float2 id = floor(g);\n"
+"  [unroll] for (int j = -1; j <= 1; j++) {\n"
+"    [unroll] for (int i = -1; i <= 1; i++) {\n"
+"      float2 cell = id + float2(i, j);\n"
+"      float3 h = float3(wh21(cell), wh21(cell + 4.3), wh21(cell + 8.9));\n"
+"      float rc = length((cell + 0.5 - sd.x * 37.0) / 7.0);\n"
+"      if (h.x > pow(saturate(1.0 - rc / 1.15), 1.5) * (0.2 + 0.4 * sd.y)) continue;\n"
+"      float rad = (0.10 + 0.28 * h.z) * (1.1 - 0.6 * saturate(rc / 1.15));\n"
+"      float2 c0 = cell + 0.2 + 0.6 * float2(h.y, h.z);\n"
+"      float slide = rad > 0.2 && h.y > 0.35 ? min(age * 0.02 * h.y, 1.6) : 0.0;\n"
+"      float2 c1 = c0 + gdir * slide;\n"
+"      float dd = wseg(g, c0, c1) / rad;\n"
+"      float m = smoothstep(1.0, 0.65, dd);\n"
+"      cov = max(cov, m);\n"
+"      tl += (g - c1) / rad * 0.9 * m;\n"
+"    }\n"
+"  }\n"
+"  cov *= life * saturate(sd.y * 1.5 + 0.2);\n"
+"  bcov = max(bcov, cov);\n"
+"  bw += cov;\n"
+"  bf += fresh * cov;\n"
+"  bt += tl * fresh * life;\n"
+"}\n"
+"float4 wpn_post(float4 col, float4 sp, float2 uv) {\n"
+"  float str = wp0.x, dust = wp1.x, wet = wp1.z, seed = wp2.w;\n"
+"  float3 P = float3((sp.x / wp3.x * 2.0 - 1.0) * wp0.y, (1.0 - sp.y / wp3.y * 2.0) * wp0.z, 1.0) / max(sp.w, 1e-6);\n"
+"  float3 dx = ddx(P), dy = ddy(P);\n"
+"  float3 N = cross(dx, dy);\n"
+"  float nl = length(N);\n"
+"  N = nl > 1e-12 ? N / nl : float3(0, 0, -1);\n"
+"  if (dot(N, P) > 0.0) N = -N;\n"
+"  float lum = dot(col.rgb, float3(0.299, 0.587, 0.114));\n"
+"  float mxc = max(col.r, max(col.g, col.b)), mnc = min(col.r, min(col.g, col.b));\n"
+"  float sat = (mxc - mnc) / (mxc + 0.02);\n"
+"  /* the patterns live on the SURFACE: in the texture's own coordinates, so they move with the gun and the hands whatever they do.\n"
+"     Gravity is found from the screen: going down the screen changes uv by ddy(uv). */\n"
+"  float2 gx = ddx(uv), gd = ddy(uv);\n"
+"  float gl = length(gd);\n"
+"  float2 gdir = gl > 1e-9 ? gd / gl : float2(0, 1);\n"
+"  bool alongU = abs(gd.x) > abs(gd.y);\n"
+"  float gsg = (alongU ? gd.x : gd.y) >= 0.0 ? 1.0 : -1.0;\n"
+"  float2 pb = uv * 0.4;\n"
+"  float2 pr = (alongU ? float2(uv.y, -gsg * uv.x) : float2(uv.x, -gsg * uv.y)) * 0.4;\n"
+"  WAcc a; a.cov = 0; a.ring = 0; a.tilt = float2(0, 0);\n"
+"  WAcc ar; ar.cov = 0; ar.ring = 0; ar.tilt = float2(0, 0);\n"
+"  if (wet > 0.01) { wbeads(pb, wp0.w, wet, a); wrunners(pr, wp0.w, wet, ar); }\n"
+"  float2 tr = alongU ? float2(-gsg * ar.tilt.y, ar.tilt.x) : float2(ar.tilt.x, -gsg * ar.tilt.y);   /* the runners' tilt back in uv axes */\n"
+"  a.cov = max(a.cov, ar.cov); a.ring = max(a.ring, ar.ring); a.tilt += tr;\n"
+"  float bcov = 0, bw = 0, bf = 0; float2 bt = float2(0, 0);\n"
+"  [loop] for (int k = 0; k < 8; k++) {\n"
+"    float2 c2 = frac(bl[k].xy * float2(1.7, 2.3) + bs[k].x * 0.31 + 0.2) * 0.7 + 0.15;   /* a second place on the surface, for the parts that are hidden */\n"
+"    wblood(uv, bl[k].xy, bl[k], bs[k].xy, gdir, bcov, bw, bf, bt);\n"
+"    wblood(uv, c2, bl[k], bs[k].xy * float2(1.0, 0.8), gdir, bcov, bw, bf, bt);\n"
+"  }\n"
+"  float bfresh = bw > 0.0 ? bf / bw : 0.0;\n"
+"  float cw = saturate(a.cov);\n"
+"  float2 tuv = a.tilt + bt * 0.8;                           /* the tilt of drops and blood, in uv axes -> view x right, y up through the screen's own derivatives */\n"
+"  float jdet = gx.x * gd.y - gx.y * gd.x;\n"
+"  float jinv = abs(jdet) > 1e-14 ? 1.0 / jdet : 0.0;\n"
+"  float2 tpx = float2(gd.y * tuv.x - gd.x * tuv.y, -gx.y * tuv.x + gx.x * tuv.y) * jinv;\n"
+"  float2 tvw = float2(tpx.x, -tpx.y);\n"
+"  float tvl = length(tvw);\n"
+"  tvw = tvl > 1e-9 ? tvw / tvl * length(tuv) : float2(0, 0);\n"
+"  float dmask = saturate(saturate((wfbm(uv * 7.0 + seed) - 0.42) * 3.5) * dust);\n"
+"  /* bump from the picture's own brightness (no tangents needed) */\n"
+"  float H = lum * 0.8;\n"
+"  float3 r1 = cross(dy, N), r2 = cross(N, dx);\n"
+"  float det = dot(dx, r1);\n"
+"  float3 sg = sign(det) * (ddx(H) * r1 + ddy(H) * r2);\n"
+"  float plen = length(dx) + length(dy) + 1e-9;\n"
+"  N = normalize(abs(det) * N - (2.0 * plen) * sg);\n"
+"  /* the triangle normal shows as hard facets on the low-poly hands, so it is only a small part of any normal used here. Ns (water film,\n"
+"     drops) leans almost fully to the view. Nd (the light) is a pseudo normal from where the pixel is on the weapon: an ellipse round\n"
+"     the gun and hands in view angles, so the right part faces right, the top part up (smooth, no facets), plus a little real normal. */\n"
+"  float3 Vv = normalize(-P);\n"
+"  float3 Ns = normalize(lerp(N, Vv, 0.9));\n"
+"  /* where the gun and hands are on a 16:9 view without aiming (measured on screenshots): centre (0.2, -0.6), half size (0.3, 0.45) in view\n"
+"     units scaled to that picture; aiming (wp1.y) moves them to the middle. */\n"
+"  float2 vxy = float2((sp.x / wp3.x * 2.0 - 1.0) * wp0.y / 0.93, (1.0 - sp.y / wp3.y * 2.0) * wp0.z / 0.525);\n"
+"  float2 gcen = lerp(float2(0.2, -0.6), float2(0.02, -0.62), wp1.y), gext = lerp(float2(0.3, 0.45), float2(0.14, 0.38), wp1.y);\n"
+"  float3 Np = normalize(float3((vxy - gcen) / gext, -1.0));\n"
+"  float3 Nr = normalize(lerp(N, Vv, 0.5));\n"
+"  float3 Nd = normalize(Np + 0.08 * Nr);\n"
+"  N = normalize(Ns + float3(tvw * 0.9, 0.0));\n"
+"  float3 V = Vv;\n"
+"  float3 R = reflect(-V, N);\n"
+"  float ndv = saturate(dot(N, V));\n"
+"  float fres = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);\n"
+"  float3 envA = wp1.w > 0.5 ? txe.SampleLevel(sme, float2(0.5, 0.5), 7.0).rgb : float3(0.4, 0.4, 0.4);\n"
+"  float2 su = float2(R.x / max(R.z, 0.25) / wp0.y, -R.y / max(R.z, 0.25) / wp0.z) * 0.5 + 0.5;\n"
+"  float3 envS = wp1.w > 0.5 ? txe.SampleLevel(sme, saturate(su), 2.5).rgb : envA;\n"
+"  float3 env = lerp(envA, envS, smoothstep(0.05, 0.5, R.z));\n"
+"  float el = dot(envA, float3(0.299, 0.587, 0.114)) + 0.03;\n"
+"  float metal = saturate(1.3 - sat * 2.2);\n"
+"  /* the light: where the picture is brightest (found on the CPU). The side of the gun / hand that faces it is brighter, the other side\n"
+"     darker, metal gets a highlight and the edges facing the light a rim. Nothing is added to a surface that is not wet or bloody\n"
+"     unless a light faces it. */\n"
+"  float lint = wl0.w * str;\n"
+"  float3 Lw = wl0.xyz, lcol = wl1.rgb;\n"
+"  float ndl = dot(Nd, Lw);\n"
+"  float wrapl = saturate(ndl * 0.6 + 0.4);\n"
+"  float3 Hh = normalize(Lw + V);\n"
+"  /* a broad highlight from the pseudo normal (fixed on the screen, so wide), a tight one on metal only from the real normal (that follows\n"
+"     the gun's own shape and movement; the facets were on the skin) */\n"
+"  float lspec = pow(saturate(dot(Nd, Hh)), 6.0) * (0.06 + 0.2 * metal) + pow(saturate(dot(Nr, Hh)), 40.0) * smoothstep(0.6, 0.92, metal) * 0.9;   /* only real metal (gun-grey, not skin) */\n"
+"  float rim = pow(1.0 - saturate(dot(Nd, V)), 1.5) * saturate(ndl + 0.25);\n"
+"  float facing = saturate(ndl * 0.7 + 0.3);                /* how much this part of the weapon faces the light: water and blood shine there */\n"
+"  float gloss = saturate(0.2 * wet * facing + 0.8 * cw * (0.4 + 0.6 * facing) + 0.9 * bcov * bfresh * (0.5 + 0.5 * facing)) * (1.0 - 0.75 * dmask);\n"
+"  float specAmt = str * (0.15 + 0.85 * fres) * gloss * 1.9;\n"
+"  float3 rgb = col.rgb * (1.0 + 0.5 * lint * (2.0 * wrapl - 1.0));\n"
+"  rgb *= lerp(float3(1, 1, 1), envA / el, 0.08 * str);\n"
+"  rgb += lcol * (lspec * 0.9 + rim * 0.5) * lint * (0.5 + 0.5 * saturate(el * 3.0));\n"
+"  rgb *= 1.0 - 0.12 * wet;\n"
+"  rgb *= 1.0 - 0.30 * a.ring;\n"
+"  rgb = lerp(rgb, float3(0.62, 0.54, 0.42) * (0.25 + el * 0.9), dmask * (0.5 + 0.25 * saturate(dust - 1.0)));\n"
+"  float3 bcol = lerp(wp2.rgb * 0.28 + float3(0.012, 0.006, 0.004), wp2.rgb * 1.1, bfresh) * (0.5 + el);\n"
+"  rgb = lerp(rgb, bcol, bcov * 0.93);\n"
+"  rgb += env * specAmt;\n"
+"  rgb += env * cw * (0.3 + 1.5 * fres) * (0.4 + 0.6 * facing);\n"
+"  rgb += env * bcov * bfresh * (0.2 + 1.0 * fres) * (0.5 + 0.5 * facing);\n"
+"  return float4(rgb, col.a);\n"
+"}\n";
+
 /* The vertex shader turns surface pixels into clip space with the vertex's
  * own w, so the hardware interpolates the texture coordinates perspective-
  * correctly exactly as the software path does (s/w, t/w, 1/w, divide).
@@ -108,6 +331,7 @@ static const char k_hlsl[] =
 "  int4 inreg[72];  /* reg, rep */\n"
 "  float4 inmap[72];/* lo, hi, s, b */\n"
 "  float4 tscale[4];/* coordinate scale x y, z: texture valid, w: alpha 1 */\n"
+"  float4 wpn;      /* x: weapon lighting strength (0 = a normal draw) */\n"
 "};\n"
 "Texture2D tx0 : register(t0); Texture2D tx1 : register(t1);\n"
 "Texture2D tx2 : register(t2); Texture2D tx3 : register(t3);\n"
@@ -219,6 +443,7 @@ typedef struct {
     int32_t inreg[72][4];
     float inmap[72][4];
     float tscale[4][4];
+    float wpn[4];                     /* x: weapon lighting strength; 0 for every other draw */
 } PSConsts;
 
 /* ---- pixel shaders specialised per combiner setup ---------------------------
@@ -269,6 +494,8 @@ static uint32_t pss_key(const PSConsts *pc, uint32_t *k)
     k[n++] = (uint32_t)pc->misc3[1];            /* texkill comparisons */
     k[n++] = (uint32_t)pc->misc3[3];            /* textured */
     k[n++] = (uint32_t)pc->misc2[2];            /* alpha test on */
+    if (pc->wpn[0] > 0.0f)
+        k[n++] = 0x57504C00u | WPN_VERSION;     /* a weapon variant: every other draw keeps its key (and cached shader) */
     for (st = 0; st < 4; st++)
         k[n++] = (pc->tscale[st][2] > 0.0f ? 1u : 0u) | (pc->tscale[st][3] > 0.0f ? 2u : 0u);
     if (use_rc) {
@@ -332,6 +559,7 @@ static const char k_pss_head[] =
 "  int4 fl[8]; float4 outm[8];\n"
 "  int4 inreg[72]; float4 inmap[72];\n"
 "  float4 tscale[4];\n"
+"  float4 wpn;\n"
 "};\n"
 "Texture2D tx0 : register(t0); Texture2D tx1 : register(t1);\n"
 "Texture2D tx2 : register(t2); Texture2D tx3 : register(t3);\n"
@@ -367,6 +595,8 @@ static char *pss_source(const PSConsts *pc)
     static const char comp[4] = { 'x', 'y', 'z', 'w' };
 
     sb_add(&b, "%s", k_pss_head);
+    if (pc->wpn[0] > 0.0f)
+        sb_add(&b, "%s", k_wpn_hlsl);
     sb_add(&b, "float4 psmain(VO i) : SV_Target {\n");
     sb_add(&b, "  float4 t0 = 0, t1 = 0, t2 = 0, t3 = 0; bool kill = false;\n");
     for (st = 0; st < 4; st++) {
@@ -470,6 +700,8 @@ static char *pss_source(const PSConsts *pc)
         } else
             sb_add(&b, "  col = r12;\n");
     }
+    if (pc->wpn[0] > 0.0f)
+        sb_add(&b, "  col = wpn_post(col, i.pos, i.t0.xy * tscale[0].xy);\n");
     sb_add(&b, "  col = saturate(col);\n");
     if (pc->misc2[2] != 0)
         sb_add(&b, "  { int v = (int)(col.w * 255.0 + 0.5), r = misc3.x & 255, fn = misc2.w;\n"
@@ -637,6 +869,7 @@ static const char k_hlsl_prog[] =
 "  float4 df;     // x, y anti-aliasing scale, z near-plane offset\n"
 "  float4 fogp;   // x, y fog params, z fog on, w fog mode (bits)\n"
 "  uint4 slot[4]; // input register -> its place among a vertex's inputs\n"
+"  float4 hud;    // x: ultrawide HUD batch shift (fraction of the picture width)\n"
 "};\n"
 "StructuredBuffer<float4> vin : register(t0);\n"
 "struct VOP { float4 pos:SV_Position; noperspective float4 d0:COLOR0;\n"
@@ -730,6 +963,9 @@ static const char k_hlsl_prog[] =
 "  float4 P = r[12];\n"
 "  if (P.w == 0 && asuint(P.w) == 0 && abs(P.x) < 1e15 && abs(P.y) < 1e15) P.w = 1;\n"
 "  else if (abs(P.w) < 5.421011e-20) P.w = (asuint(P.w) >> 31) ? -5.421011e-20 : 5.421011e-20;\n"
+"  // ultrawide HUD: df.w = k > 0 squeezes the batch's x by k around the centre, hud.x moves the whole batch (the CPU chose its\n"
+"  // edge from where the batch is). Vertices on the very edge (a full-screen quad) stay, so fades and tints still cover it all\n"
+"  if (df.w > 0 && P.x > 0.5 && P.x < 639.5) P.x = (0.5 + (P.x / 640.0 - 0.5) * df.w + hud.x) * 640.0;\n"
 "  P.x *= df.x; P.y *= df.y;\n"
 "  VOP v;\n"
 "  float w = P.w;\n"
@@ -778,14 +1014,17 @@ typedef struct {
     float df[4];
     float fogp[4];
     uint32_t slot[16];
+    float hud[4];                       /* x: ultrawide HUD batch shift (fraction of the picture width) */
 } VDrawConsts;
 
 static ID3DBlob *compile(const char *entry, const char *target)
 {
     ID3DBlob *code = NULL, *err = NULL;
-    HRESULT hr = D3DCompile(k_hlsl, sizeof k_hlsl - 1, "nv2a_gpu", NULL, NULL,
-                            entry, target, D3DCOMPILE_OPTIMIZATION_LEVEL3, 0,
-                            &code, &err);
+    HRESULT hr;
+    /* the generic shader (and the vertex shader) are compiled at start-up, on the game's thread: no weapon lighting in it (that code
+     * makes this compile several seconds longer); the weapon's own variants have it (pss_source) */
+    hr = D3DCompile(k_hlsl, sizeof k_hlsl - 1, "nv2a_gpu", NULL, NULL,
+                    entry, target, D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &err);
     if (FAILED(hr)) {
         fprintf(stderr, "[NV2A-GPU] %s: shader compile failed (0x%08lX)\n%s\n",
                 entry, (unsigned long)hr,
@@ -998,6 +1237,89 @@ int nv2a_gpu_program_ok(void)
     return s_on > 0 && prog_init();
 }
 
+/* ---- Ultrawide (RECOMP_ASPECT) -------------------------------------------
+ * The title's widescreen mode draws 16:9 squeezed into the 640x480 frame. For a wider screen the game side (recomp_manual.c)
+ * widens the world's horizontal view and tells the presenters the shape of the gameplay picture it is drawing
+ * (recomp_wide_frame); menus, the pause screen and anything else stay 16:9. RECOMP_ASPECT = "21:9", "2.37", or "auto"
+ * (the window's shape, from what the presenters report; before the first frame the monitor's). Shapes at or under 16:9 mean
+ * off (a taller window never narrows the view); the widest is 32:9. */
+static float s_wide_fixed = -1.0f;                  /* -1 not read, 0 none, > 0 fixed */
+static int s_wide_auto;
+static volatile float s_client_asp;                 /* the window's client shape, as the presenters last saw it */
+static volatile float s_frame_asp;
+static volatile DWORD s_frame_tick;
+static int (*volatile s_wide_gate)(void);           /* 0 = no wide picture now (a menu is up) */
+
+#define WIDE_MIN_ASPECT 1.80f
+#define WIDE_MAX_ASPECT 3.60f
+
+static void wide_read(void)
+{
+    const char *e = getenv("RECOMP_ASPECT");
+    float a = 0.0f, w, h;
+    s_wide_fixed = 0.0f;
+    if (!e || !*e)
+        return;
+    if (!_stricmp(e, "auto"))
+        s_wide_auto = 1;
+    else if (sscanf(e, "%f:%f", &w, &h) == 2 && h > 0.0f)
+        a = w / h;
+    else
+        a = (float)atof(e);
+    s_wide_fixed = a < WIDE_MIN_ASPECT ? 0.0f : a > WIDE_MAX_ASPECT ? WIDE_MAX_ASPECT : a;
+}
+
+/* The configured gameplay shape: 0 = plain 16:9. */
+float recomp_wide_target(void)
+{
+    float a;
+    if (s_wide_fixed < 0.0f)
+        wide_read();
+    if (!s_wide_auto)
+        return s_wide_fixed;
+    a = s_client_asp;
+    if (a <= 0.0f) {
+        int mw = GetSystemMetrics(SM_CXSCREEN), mh = GetSystemMetrics(SM_CYSCREEN);
+        a = mh > 0 ? (float)mw / (float)mh : 0.0f;
+    }
+    return a < WIDE_MIN_ASPECT ? 0.0f : a > WIDE_MAX_ASPECT ? WIDE_MAX_ASPECT : a;
+}
+
+void recomp_wide_set_gate(int (*gate)(void)) { s_wide_gate = gate; }
+
+/* The game side: the gameplay picture being drawn is this shape (called every view update; 0 = normal). */
+void recomp_wide_frame(float asp)
+{
+    s_frame_asp = asp;
+    s_frame_tick = GetTickCount();
+}
+
+/* Presenters: the shape to show the frame at (dflt = the shape it has without ultrawide). */
+float recomp_present_aspect(float dflt)
+{
+    float a = s_frame_asp;
+    int (*g)(void) = s_wide_gate;
+    if (a > 0.0f && GetTickCount() - s_frame_tick < 250u && (!g || g()))
+        return a;
+    return dflt;
+}
+
+/* The factor the 2D HUD is squeezed in x by (the shader also moves each element to its own edge: left ones to the left edge, right
+ * ones to the right edge, the middle ones stay in the middle): the game's own 16:9 HUD shape over the picture's shape. 0 = leave the
+ * HUD alone (no gameplay picture now, or the picture is not wider than 16:9). */
+float recomp_wide_hud_k(void)
+{
+    float a = recomp_present_aspect(0.0f);
+    return a > 16.0f / 9.0f + 0.01f ? (16.0f / 9.0f) / a : 0.0f;
+}
+
+/* Presenters report the window's client size (the shape "auto" follows). */
+void recomp_wide_client(unsigned cw, unsigned ch)
+{
+    if (cw && ch)
+        s_client_asp = (float)cw / (float)ch;
+}
+
 static void scale_init(void)
 {
     const char *r = getenv("RECOMP_GPU_RES");
@@ -1005,6 +1327,13 @@ static void scale_init(void)
     unsigned rw = 0, rh = 0;
     if (r && sscanf(r, "%ux%u", &rw, &rh) == 2 && rw >= 640 && rh >= 480
         && rw <= 640 * 8 && rh <= 480 * 8) {
+        float wt = recomp_wide_target();
+        if (wt > 0.0f && fabsf((float)rw / (float)rh - 16.0f / 9.0f) < 0.05f) {
+            /* a 16:9 resolution with ultrawide on: same height, the width of the wider picture (the surface is the
+             * gameplay picture; menus show it squeezed into 16:9) */
+            unsigned nw = (unsigned)((float)rh * wt + 0.5f);
+            rw = nw > 640 * 8 ? 640 * 8 : nw;
+        }
         s_sx = (float)rw / 640.0f;
         s_sy = (float)rh / 480.0f;
     } else {
@@ -1083,6 +1412,7 @@ static void gpu_time_frame(void)
 extern uint64_t g_pb_walk_ns;          /* nv2a_pb_scan.c */
 static void prof_report(void);         /* RECOMP_GPU_PROF, below */
 
+static void wpn_tick(void);                    /* the weapon lighting block, after the blit code */
 void nv2a_gpu_frame(void)
 {
     static int stats = -1;
@@ -1121,6 +1451,7 @@ void nv2a_gpu_frame(void)
         memset(&s_st, 0, sizeof s_st);
         t0 = t;
     }
+    wpn_tick();
     if (++s_frame == 0)
         s_frame = 1;
 }
@@ -2041,9 +2372,129 @@ static void prof_report(void)
     s_prof_draws = 0;
 }
 
+/* Ctrl+F12 report frame (the "black ground" hunt): one line per draw saying what it was drawn with --
+ * each texture stage's decode and its average colour (a texture decoded from zeros shows as 00000000),
+ * whether the combiner's own compiled shader or the generic one ran, and non-finite numbers in the
+ * vertex constants and inputs. A player sends play_log.txt; the black draws are the ones with a dark
+ * stage, a NaN, or a compiled shader where the generic one is right. Only runs in a traced frame. */
+static const char *pss_peek(const PSConsts *pc, uint64_t *hout)
+{
+    uint32_t k[PSS_KEY_MAX], n, i;
+    uint64_t h;
+
+    *hout = 0;
+    if (s_pss_on <= 0)
+        return "off";
+    n = pss_key(pc, k);
+    h = pss_hash(k, n);
+    *hout = h;
+    for (i = 0; i < PSS_SLOTS; i++) {
+        const PsSpec *c = &s_pss[(h + i) & (PSS_SLOTS - 1)];
+        if (!c->key)
+            return "new";
+        if (c->hash == h && c->nkey == n && !memcmp(c->key, k, n * 4))
+            return c->state == 2 ? "ready" : c->state == 3 ? "failed" : "queued";
+    }
+    return "full";
+}
+
+static void diag_tex(const Nv2aGpuTexture *t, int i)
+{
+    if (!t->valid && !t->from_surface) {
+        fprintf(stderr, " | t%d off", i);
+        return;
+    }
+    if (t->from_surface) {
+        fprintf(stderr, " | t%d surface %08X %ux%u", i, t->surf_va, t->surf_w, t->surf_h);
+        return;
+    }
+    {
+        uint32_t w = t->lv_w ? t->lv_w[0] : 0, h = t->lv_h ? t->lv_h[0] : 0, n = w * h, step, k, cnt = 0, zero = 0;
+        uint64_t r = 0, g = 0, b = 0, a = 0;
+        const GpuTex *g2 = t->slot < GPU_TEX_SLOTS ? &s_tex[t->slot] : NULL;
+        if (t->argb && n) {
+            step = n / 512u ? n / 512u : 1u;
+            for (k = 0; k < n; k += step) {
+                uint32_t p = t->argb[(t->lv_off ? t->lv_off[0] : 0) + k];
+                r += (p >> 16) & 255u; g += (p >> 8) & 255u; b += p & 255u; a += p >> 24;
+                if (!(p & 0x00FFFFFFu))
+                    zero++;
+                cnt++;
+            }
+        }
+        if (cnt)
+            fprintf(stderr, " | t%d slot %u ver %u %ux%u lv %u avg %02X%02X%02X%02X black %u%% gpu %s",
+                    i, t->slot, t->version, w, h, t->levels, (unsigned)(a / cnt), (unsigned)(r / cnt),
+                    (unsigned)(g / cnt), (unsigned)(b / cnt), zero * 100u / cnt,
+                    g2 && g2->srv ? "ok" : "NONE");
+        else
+            fprintf(stderr, " | t%d slot %u ver %u %ux%u NO-PIXELS gpu %s", i, t->slot, t->version, w, h,
+                    g2 && g2->srv ? "ok" : "NONE");
+    }
+}
+
+static void draw_diag(const Nv2aGpuState *st, const Nv2aGpuProgram *pg, const PSConsts *pc,
+                      const Nv2aGpuVertex *v, uint32_t nverts, uint32_t nidx, uint32_t sw, uint32_t sh)
+{
+    static uint32_t n;
+    uint64_t h;
+    const char *state = pss_peek(pc, &h);
+    int i;
+
+    fprintf(stderr, "[BDIAG] #%u %s into %ux%u n %u idx %u | rc %u prog_ver %u | ps %s %s %016llX | blend %u %X/%X | z %u/%u",
+            n++, pg ? "PRG" : "FIX", sw, sh, nverts, nidx, (unsigned)pc->misc[0], st->prog_ver,
+            s_bind.ps == s_ps ? "generic" : "compiled", state, (unsigned long long)h,
+            st->rs.blend_enable, st->rs.blend_src, st->rs.blend_dst, st->rs.depth_test_enable, st->rs.depth_write);
+    for (i = 0; i < 4; i++)
+        diag_tex(&st->tex[i], i);
+    if (pg) {
+        uint32_t k, bad_c = 0, bad_v = 0, nv = nverts * pg->nused;
+        const float *c = &pg->consts[0][0], *in = &pg->vin[0][0];
+        for (k = 0; k < 192u * 4u; k++)
+            if ((((const uint32_t *)c)[k] & 0x7F800000u) == 0x7F800000u)
+                bad_c++;
+        for (k = 0; k < nv * 4u && k < 16384u; k++)
+            if ((((const uint32_t *)in)[k] & 0x7F800000u) == 0x7F800000u)
+                bad_v++;
+        fprintf(stderr, " | cver %u nins %u nonfinite c %u v %u", pg->const_version, pg->nins, bad_c, bad_v);
+        if (pg->slot[3] < pg->nused && nverts) {
+            float sum[4] = {0, 0, 0, 0};
+            uint32_t m = nverts < 32u ? nverts : 32u;
+            for (k = 0; k < m; k++)
+                for (i = 0; i < 4; i++)
+                    sum[i] += pg->vin[k * pg->nused + pg->slot[3]][i];
+            fprintf(stderr, " | v3 avg %.2f %.2f %.2f %.2f", sum[0] / m, sum[1] / m, sum[2] / m, sum[3] / m);
+        }
+    } else if (v && nverts) {
+        fprintf(stderr, " | d0 %.2f %.2f %.2f %.2f", v[0].d0[0], v[0].d0[1], v[0].d0[2], v[0].d0[3]);
+    }
+    fputc('\n', stderr);
+}
+
+/* Counters for the head of a report frame (nv2a_pb_exec.c's frame_trace_flip). */
+void nv2a_gpu_diag_header(void)
+{
+    uint32_t i, ready = 0, queued = 0, failed = 0, tex = 0;
+    for (i = 0; i < PSS_SLOTS; i++) {
+        if (!s_pss[i].key)
+            continue;
+        if (s_pss[i].state == 2) ready++;
+        else if (s_pss[i].state == 3) failed++;
+        else queued++;
+    }
+    for (i = 0; i < GPU_TEX_SLOTS; i++)
+        if (s_tex[i].srv)
+            tex++;
+    fprintf(stderr, "[BDIAG] gpu: compiled shaders ready %u queued %u failed %u | gpu textures live %u created %u | draws %u\n",
+            ready, queued, failed, tex, (unsigned)s_st.textures, (unsigned)s_st.draws);
+}
+
 /* A batch: nverts vertices, drawn as a triangle list -- in order, or
  * through idx (nidx indices into v) when the executor sends each vertex
  * once (nv2a_gpu_draw_indexed). */
+static float wpn_strength(void);              /* the weapon lighting block, after the blit code */
+static float wpn_amount(void);
+static void wpn_bind(const GpuSurf *s);
 static void draw_common(const Nv2aGpuState *st, const Nv2aGpuVertex *v,
                         uint32_t nverts, const uint32_t *idx, uint32_t nidx,
                         const Nv2aGpuProgram *pg)
@@ -2148,6 +2599,8 @@ static void draw_common(const Nv2aGpuState *st, const Nv2aGpuVertex *v,
         dc.df[0] = pg->aa_sx;
         dc.df[1] = pg->aa_sy;
         dc.df[2] = pg->near_o2;
+        dc.df[3] = pg->hud_k;
+        dc.hud[0] = pg->hud_shift;
         dc.fogp[0] = pg->fog_param[0];
         dc.fogp[1] = pg->fog_param[1];
         dc.fogp[2] = pg->fog_enable ? 1.0f : 0.0f;
@@ -2277,6 +2730,7 @@ static void draw_common(const Nv2aGpuState *st, const Nv2aGpuVertex *v,
     pc.misc3[2] = (int32_t)st->stage_program;
     pc.misc3[3] = st->textured;
     memcpy(pc.fogc, st->fog_color, 16);
+    pc.wpn[0] = (pg && pg->weapon) ? wpn_strength() : 0.0f;
 
     PROF_MARK(5);
     /* Textures and samplers, per stage. */
@@ -2370,6 +2824,8 @@ static void draw_common(const Nv2aGpuState *st, const Nv2aGpuVertex *v,
     }
     PROF_MARK(6);
     s_bind.srvs = 1;
+    if (pc.wpn[0] > 0.0f)
+        wpn_bind(s);
     {
         /* The same constants as the draw before (most of a mesh's draws):
          * the same shader, and nothing to upload. The look-up still runs
@@ -2393,6 +2849,8 @@ static void draw_common(const Nv2aGpuState *st, const Nv2aGpuVertex *v,
             s_pc_ok = 1;
         }
     }
+    if (st->trace)
+        draw_diag(st, pg, &pc, v, nverts, nidx, s->d.width, s->d.height);
 
     PROF_MARK(7);
     /* Blend, colour mask. */
@@ -2914,6 +3372,410 @@ static int scale_blit(ID3D11ShaderResourceView *src, ID3D11RenderTargetView *dst
     return 1;
 }
 
+/* ---- WEAPON LIGHTING: state, environment copy, constants (the shader is k_wpn_hlsl, near the top) ------------------------------ */
+#define ENV_W 256
+#define ENV_H 144
+#define WPN_BLOOD_N 8
+typedef struct { float wp0[4], wp1[4], wp2[4], wp3[4], bl[WPN_BLOOD_N][4], bs[WPN_BLOOD_N][4], wl0[4], wl1[4]; } WpnCB;
+typedef struct { int used; double t0; float x, y, size, seed, str; } WpnBlood;   /* one splatter: a hit */
+static volatile int s_wpn_level;                /* 0 off, 1 low, 2 normal, 3 high, 4 extreme */
+static float s_wpn_tan_h = 0.70f, s_wpn_tan_v = 0.525f;
+static volatile float s_wpn_dust, s_wpn_wet;
+static WpnBlood s_wpn_bl[WPN_BLOOD_N];
+static float s_wpn_bcol[3] = { 0.40f, 0.027f, 0.022f };   /* the blood colour setting (set by the game side) */
+static volatile float s_wpn_off[2];                       /* where the gun sits on the screen now, in view units (sway, run pose) */
+static double s_wpn_now_s;                                /* seconds, updated at every flip */
+static unsigned s_wpn_rng = 0x1234567u;
+static volatile LONG s_wpn_rain_x1000;
+static volatile DWORD s_wpn_rain_until;
+static double s_wpn_tick_ms;
+static uint32_t s_wpn_draw_frame;               /* the frame of the last weapon draw: the environment copy is only kept up to date near it */
+static float s_wpn_seed = 3.7f;
+static ID3D11Buffer *s_cb_wpn;
+static ID3D11Texture2D *s_env_tex;
+static ID3D11ShaderResourceView *s_env_srv;
+static ID3D11RenderTargetView *s_env_rtv;
+static ID3D11SamplerState *s_env_smp;
+static int s_env_state;                         /* 0 not made yet, 1 ready, -1 failed */
+static int s_env_have;                          /* a real frame has been copied into it */
+static ID3D11Texture2D *s_env_stg;              /* the 8x4 level of the environment copy, read back (the light's direction is found from it) */
+static int s_env_stg_pending;
+static float s_wpn_ldir[3] = { 0.5f, 0.6f, -0.3f }, s_wpn_lcol[3] = { 1.0f, 1.0f, 1.0f }, s_wpn_lint;   /* the light the weapon is lit by (smoothed) */
+
+void nv2a_gpu_weapon_config(int level) { s_wpn_level = level < 0 ? 0 : level > 4 ? 4 : level; }
+int  nv2a_gpu_weapon_level(void) { return s_wpn_level; }
+void nv2a_gpu_weapon_view(float tan_h, float tan_v)
+{
+    if (tan_h > 0.05f && tan_h < 4.0f && tan_v > 0.05f && tan_v < 4.0f) {
+        s_wpn_tan_h = tan_h;
+        s_wpn_tan_v = tan_v;
+    }
+}
+void nv2a_gpu_weapon_get_tan(float *h, float *v) { *h = s_wpn_tan_h; *v = s_wpn_tan_v; }
+static float wpn_rnd(void)
+{
+    s_wpn_rng ^= s_wpn_rng << 13;
+    s_wpn_rng ^= s_wpn_rng >> 17;
+    s_wpn_rng ^= s_wpn_rng << 5;
+    return (float)(s_wpn_rng & 0xFFFFFFu) / 16777216.0f;
+}
+
+/* A hit: a new splatter on the gun and hands (random place on the gun's part of the view). A hit right after another one (a bullet
+ * and the screen blood of the same hit, a burst) only makes the newest one bigger. 8 at most, the oldest goes first. */
+static void wpn_blood_add(float strength, int fresh)
+{
+    double now = s_wpn_now_s > 0.0 ? s_wpn_now_s : now_ms() * 0.001;
+    int i, slot = -1, newest = -1;
+    for (i = 0; i < WPN_BLOOD_N; i++) {
+        if (!s_wpn_bl[i].used) {
+            if (slot < 0 || s_wpn_bl[slot].used)
+                slot = i;
+        } else {
+            if (newest < 0 || s_wpn_bl[i].t0 > s_wpn_bl[newest].t0)
+                newest = i;
+            if (slot < 0 || (s_wpn_bl[slot].used && s_wpn_bl[i].t0 < s_wpn_bl[slot].t0))
+                slot = i;
+        }
+    }
+    if (!fresh && newest >= 0 && now - s_wpn_bl[newest].t0 < 0.5) {
+        WpnBlood *b = &s_wpn_bl[newest];
+        float s = b->str + 0.2f * strength + 0.08f;
+        b->str = s > 1.5f ? 1.5f : s;
+        return;
+    }
+    if (slot < 0)
+        return;
+    {
+        WpnBlood *b = &s_wpn_bl[slot];
+        b->used = 0;
+        b->t0 = now;
+        b->x = 0.15f + 0.70f * wpn_rnd();       /* a place on the textures of the gun and hands (their own uv: the blood sticks to the surface) */
+        b->y = 0.15f + 0.70f * wpn_rnd();
+        b->size = 0.10f + 0.10f * strength;     /* the setting (Low 0.6 / Normal 1 / High 1.5) scales these when drawn (wpn_bind) */
+        b->seed = wpn_rnd() * 10.0f;
+        b->str = 0.35f + 0.65f * strength;
+        b->used = 1;
+    }
+}
+
+void nv2a_gpu_weapon_trigger(int kind, float strength)
+{
+    float v;
+    if (s_wpn_level <= 0)
+        return;
+    strength = strength < 0.0f ? 0.0f : strength > 1.0f ? 1.0f : strength;
+    if (kind == 1) {                            /* an explosion near the player: dust */
+        v = s_wpn_dust + 0.35f + 0.40f * strength;
+        s_wpn_dust = v > 1.0f ? 1.0f : v;
+    } else {                                    /* a hit on the player or near him: blood */
+        wpn_blood_add(strength, 0);
+        if (s_wpn_level >= 4) {                 /* Extreme: three splatters for every hit, the gun and hands are nearly covered */
+            wpn_blood_add(strength, 1);
+            wpn_blood_add(strength, 1);
+        }
+    }
+}
+void nv2a_gpu_weapon_blood_color(float r, float g, float b)
+{
+    s_wpn_bcol[0] = r < 0.0f ? 0.0f : r > 1.0f ? 1.0f : r;
+    s_wpn_bcol[1] = g < 0.0f ? 0.0f : g > 1.0f ? 1.0f : g;
+    s_wpn_bcol[2] = b < 0.0f ? 0.0f : b > 1.0f ? 1.0f : b;
+}
+static volatile float s_wpn_aim;
+void nv2a_gpu_weapon_aim(float f)
+{
+    s_wpn_aim = f;
+}
+void nv2a_gpu_weapon_offset(float x, float y)
+{
+    s_wpn_off[0] = x;
+    s_wpn_off[1] = y;
+}
+void nv2a_gpu_weapon_rain(float strength)
+{
+    if (strength <= 0.0f) {
+        s_wpn_rain_until = 0;
+        return;
+    }
+    s_wpn_rain_x1000 = (LONG)((strength > 1.0f ? 1.0f : strength) * 1000.0f);
+    s_wpn_rain_until = GetTickCount() + 1500;
+}
+void nv2a_gpu_weapon_clean(void)
+{
+    int i;
+    s_wpn_dust = s_wpn_wet = 0.0f;
+    s_wpn_rain_until = 0;
+    for (i = 0; i < WPN_BLOOD_N; i++)
+        s_wpn_bl[i].used = 0;
+}
+
+/* Once a frame (the flip): the amounts follow time. Rain wets the weapon in about 5 s and it dries in about 30; dust fades in 50 s,
+ * blood in 80 s. */
+static void wpn_tick(void)
+{
+    double now = now_ms();
+    float dt = s_wpn_tick_ms > 0.0 ? (float)((now - s_wpn_tick_ms) * 0.001) : 0.0f, w;
+    static int force = -1;
+    int i;
+    nv2a_gpu_weapon_frame_end();
+    g_nv_wpn_pass = 0;
+    s_wpn_tick_ms = now;
+    s_wpn_now_s = now * 0.001;
+    for (i = 0; i < WPN_BLOOD_N; i++)           /* old splatters are gone (the shader fades them out by 190 s) */
+        if (s_wpn_bl[i].used && s_wpn_now_s - s_wpn_bl[i].t0 > 195.0)
+            s_wpn_bl[i].used = 0;
+    if (force < 0) {                            /* RECOMP_WPN_FORCE=1: dust and rain drops always on, a new splatter every 7 s (to judge the look) */
+        const char *e = getenv("RECOMP_WPN_FORCE");
+        force = e && e[0] == '1';
+    }
+    if (force) {
+        double newest = -1e9;
+        s_wpn_dust = 0.9f;
+        s_wpn_wet = 1.0f;
+        for (i = 0; i < WPN_BLOOD_N; i++)
+            if (s_wpn_bl[i].used && s_wpn_bl[i].t0 > newest)
+                newest = s_wpn_bl[i].t0;
+        if (s_wpn_level > 0 && s_wpn_now_s - newest > 7.0)
+            nv2a_gpu_weapon_trigger(0, 0.7f);
+        return;
+    }
+    if (dt < 0.0f) dt = 0.0f;
+    if (dt > 0.25f) dt = 0.25f;
+    if ((int)(s_wpn_rain_until - GetTickCount()) > 0)
+        w = s_wpn_wet + dt * 0.2f * (float)s_wpn_rain_x1000 * 0.001f;
+    else
+        w = s_wpn_wet - dt * 0.035f;
+    s_wpn_wet = w < 0.0f ? 0.0f : w > 1.0f ? 1.0f : w;
+    w = s_wpn_dust - dt * 0.02f;
+    s_wpn_dust = w < 0.0f ? 0.0f : w;
+}
+
+/* how much blood / dust / rain the setting means: Low 0.6, Normal 1, High 1.5, Extreme 3 (the gun and hands nearly covered) */
+static float wpn_amount(void)
+{
+    int l = s_wpn_level;
+    return l <= 0 ? 0.0f : l == 1 ? 0.6f : l == 2 ? 1.0f : l == 3 ? 1.5f : 3.0f;
+}
+
+static float wpn_strength(void)
+{
+    int l = s_wpn_level;
+    return l <= 0 ? 0.0f : l == 1 ? 0.6f : l == 2 ? 1.0f : l == 3 ? 1.5f : 1.8f;
+}
+
+static int wpn_env_make(void)
+{
+    D3D11_TEXTURE2D_DESC td;
+    D3D11_SAMPLER_DESC sd;
+    if (s_env_state)
+        return s_env_state > 0;
+    s_env_state = -1;
+    memset(&td, 0, sizeof td);
+    td.Width = ENV_W;
+    td.Height = ENV_H;
+    td.MipLevels = 0;                           /* the whole chain */
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    td.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+    if (FAILED(ID3D11Device_CreateTexture2D(s_dev, &td, NULL, &s_env_tex))
+        || FAILED(ID3D11Device_CreateShaderResourceView(s_dev, (ID3D11Resource *)s_env_tex, NULL, &s_env_srv))
+        || FAILED(ID3D11Device_CreateRenderTargetView(s_dev, (ID3D11Resource *)s_env_tex, NULL, &s_env_rtv)))
+        return 0;
+    memset(&sd, 0, sizeof sd);
+    sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sd.MaxLOD = D3D11_FLOAT32_MAX;
+    sd.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    if (FAILED(ID3D11Device_CreateSamplerState(s_dev, &sd, &s_env_smp)))
+        return 0;
+    td.Width = 8;                               /* level 5 of 256x144 */
+    td.Height = 4;
+    td.MipLevels = 1;
+    td.Usage = D3D11_USAGE_STAGING;
+    td.BindFlags = 0;
+    td.MiscFlags = 0;
+    td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    if (FAILED(ID3D11Device_CreateTexture2D(s_dev, &td, NULL, &s_env_stg)))
+        s_env_stg = NULL;                       /* no light direction then: the weapon keeps the default */
+    s_env_state = 1;
+    return 1;
+}
+
+/* Before a weapon draw: the constants of the effect and the environment copy bound to t4 / s4 / b5. */
+static void wpn_bind(const GpuSurf *s)
+{
+    WpnCB cb;
+    static WpnCB last;
+    static int have_last;
+    int i;
+    s_wpn_draw_frame = s_frame;
+    if (!s_cb_wpn) {
+        D3D11_BUFFER_DESC bd;
+        memset(&bd, 0, sizeof bd);
+        bd.ByteWidth = sizeof(WpnCB);
+        bd.Usage = D3D11_USAGE_DEFAULT;
+        bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        if (FAILED(ID3D11Device_CreateBuffer(s_dev, &bd, NULL, &s_cb_wpn)))
+            return;
+    }
+    wpn_env_make();
+    memset(&cb, 0, sizeof cb);
+    cb.wp0[0] = wpn_strength();
+    cb.wp0[1] = s_wpn_tan_h;
+    cb.wp0[2] = s_wpn_tan_v;
+    cb.wp0[3] = (float)fmod(s_wpn_now_s, 10000.0);
+    cb.wp1[1] = s_wpn_aim;
+    cb.wp1[0] = s_wpn_dust * wpn_amount();    /* the setting is how much dust too */
+    cb.wp1[2] = s_wpn_wet * (wpn_amount() > 2.0f ? 2.0f : wpn_amount());     /* the setting is how much rain too */
+    cb.wl0[0] = s_wpn_ldir[0];
+    cb.wl0[1] = s_wpn_ldir[1];
+    cb.wl0[2] = s_wpn_ldir[2];
+    cb.wl0[3] = s_wpn_lint;
+    cb.wl1[0] = s_wpn_lcol[0];
+    cb.wl1[1] = s_wpn_lcol[1];
+    cb.wl1[2] = s_wpn_lcol[2];
+    cb.wp1[3] = s_env_have ? 1.0f : 0.0f;
+    cb.wp2[0] = s_wpn_bcol[0] * 0.65f;          /* blood colour */
+    cb.wp2[1] = s_wpn_bcol[1] * 0.65f;
+    cb.wp2[2] = s_wpn_bcol[2] * 0.65f;
+    cb.wp2[3] = s_wpn_seed;
+    cb.wp3[0] = (float)SC_W(s->d.width);
+    cb.wp3[1] = (float)SC_H(s->d.height);
+    cb.wp3[2] = s_wpn_off[0];
+    cb.wp3[3] = s_wpn_off[1];
+    for (i = 0; i < WPN_BLOOD_N; i++) {
+        const WpnBlood *b = &s_wpn_bl[i];
+        float age = (float)(s_wpn_now_s - b->t0);
+        cb.bl[i][3] = -1.0f;
+        if (b->used && age >= 0.0f && age < 195.0f) {
+            cb.bl[i][0] = b->x;
+            cb.bl[i][1] = b->y;
+            float lv = wpn_amount();          /* the setting is how much blood: applied here, so changing it changes the old splatters too */
+            float st = b->str * lv;
+            cb.bl[i][2] = b->size * (0.55f + 0.45f * lv);
+            cb.bl[i][3] = age;
+            cb.bs[i][0] = b->seed;
+            cb.bs[i][1] = st > 3.0f ? 3.0f : st;
+        }
+    }
+    if (!have_last || memcmp(&cb, &last, sizeof cb)) {
+        ID3D11DeviceContext_UpdateSubresource(s_ctx, (ID3D11Resource *)s_cb_wpn, 0, NULL, &cb, 0, 0);
+        last = cb;
+        have_last = 1;
+    }
+    ID3D11DeviceContext_PSSetConstantBuffers(s_ctx, 5, 1, &s_cb_wpn);
+    if (s_env_srv) {
+        ID3D11DeviceContext_PSSetShaderResources(s_ctx, 4, 1, &s_env_srv);
+        ID3D11DeviceContext_PSSetSamplers(s_ctx, 4, 1, &s_env_smp);
+    }
+}
+
+/* The light the weapon is lit by, found from the picture: the 8x4 level of the environment copy is read back (the copy asked for at the
+ * last capture, so the CPU never waits), the bright places are weighted by brightness cubed: their centre says where the light is
+ * (screen x -> left / right, screen y -> up / down; a bit of up is added, lights are mostly overhead), their colour is its colour,
+ * their contrast with the rest is how directional it is (a grey, even picture gives a weak light). Smoothed over ~0.3 s. */
+static void wpn_light_update(void)
+{
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (!s_env_stg)
+        return;
+    if (s_env_stg_pending && SUCCEEDED(ID3D11DeviceContext_Map(s_ctx, (ID3D11Resource *)s_env_stg, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
+        float sw = 0.0f, cx = 0.0f, cy = 0.0f, cr = 0.0f, cg = 0.0f, cb = 0.0f, mean = 0.0f, mx = 0.0f;
+        int x, y;
+        for (y = 0; y < 4; y++) {
+            const unsigned char *row = (const unsigned char *)m.pData + (size_t)y * m.RowPitch;
+            for (x = 0; x < 8; x++) {
+                float r = row[x * 4 + 0] / 255.0f, g = row[x * 4 + 1] / 255.0f, b = row[x * 4 + 2] / 255.0f;
+                float l = 0.299f * r + 0.587f * g + 0.114f * b, w = l * l * l + 1e-4f;
+                if (y == 3)
+                    w *= 0.1f;                  /* the bottom row holds the gun, the hands and the HUD: they must not light themselves */
+                sw += w;
+                cx += w * ((float)x + 0.5f) / 8.0f;
+                cy += w * ((float)y + 0.5f) / 4.0f;
+                cr += w * r; cg += w * g; cb += w * b;
+                mean += l;
+                if (l > mx) mx = l;
+            }
+        }
+        ID3D11DeviceContext_Unmap(s_ctx, (ID3D11Resource *)s_env_stg, 0);
+        s_env_stg_pending = 0;
+        if (sw > 0.0f) {
+            float lx, ly, lz = -0.3f, ln, cm, contrast, inten, a = 0.12f, nd[3], nc[3];
+            cx /= sw; cy /= sw; cr /= sw; cg /= sw; cb /= sw;
+            mean /= 32.0f;
+            lx = (cx - 0.5f) * 2.4f;
+            ly = -(cy - 0.5f) * 2.0f + 0.3f;
+            ln = sqrtf(lx * lx + ly * ly + lz * lz);
+            nd[0] = lx / ln; nd[1] = ly / ln; nd[2] = lz / ln;
+            cm = cr > cg ? (cr > cb ? cr : cb) : (cg > cb ? cg : cb);
+            cm = cm > 1e-4f ? cm : 1e-4f;
+            nc[0] = 0.45f + 0.55f * cr / cm;    /* the light's colour, pulled towards white */
+            nc[1] = 0.45f + 0.55f * cg / cm;
+            nc[2] = 0.45f + 0.55f * cb / cm;
+            contrast = mx / (mean + 0.05f);
+            {   /* how one-sided the picture is (the bright part away from the middle) counts most, contrast a little */
+                float off = sqrtf((cx - 0.5f) * (cx - 0.5f) + (cy - 0.5f) * (cy - 0.5f)) * 3.5f;
+                float con = (contrast - 1.0f) / 2.5f;
+                off = off > 1.0f ? 1.0f : off;
+                con = con < 0.0f ? 0.0f : con > 1.0f ? 1.0f : con;
+                inten = 0.65f * off + 0.35f * con;
+            }
+            inten *= mx * 1.6f > 1.0f ? 1.0f : mx * 1.6f;
+            s_wpn_ldir[0] += a * (nd[0] - s_wpn_ldir[0]);
+            s_wpn_ldir[1] += a * (nd[1] - s_wpn_ldir[1]);
+            s_wpn_ldir[2] += a * (nd[2] - s_wpn_ldir[2]);
+            s_wpn_lcol[0] += a * (nc[0] - s_wpn_lcol[0]);
+            s_wpn_lcol[1] += a * (nc[1] - s_wpn_lcol[1]);
+            s_wpn_lcol[2] += a * (nc[2] - s_wpn_lcol[2]);
+            s_wpn_lint += a * (inten - s_wpn_lint);
+        }
+    }
+    if (!s_env_stg_pending) {
+        ID3D11DeviceContext_CopySubresourceRegion(s_ctx, (ID3D11Resource *)s_env_stg, 0, 0, 0, 0, (ID3D11Resource *)s_env_tex, 5, NULL);
+        s_env_stg_pending = 1;
+    }
+}
+
+/* At the present: the frame just made, shrunk into the 256x144 environment texture and mipped (the shader reads a blurred level of it).
+ * Only while weapon draws are happening, and every third present. uv: the part of the surface the picture covers (as the
+ * present's own blit takes it). */
+static void wpn_env_capture(ID3D11ShaderResourceView *src, const float *uv)
+{
+    static unsigned n;
+    ID3D11ShaderResourceView *none = NULL;
+    D3D11_VIEWPORT vp;
+    if (s_wpn_level <= 0 || s_frame - s_wpn_draw_frame > 90u || !blit_init() || !wpn_env_make())
+        return;
+    if ((n++ % 3u) != 0 && s_env_have)
+        return;
+    ID3D11DeviceContext_UpdateSubresource(s_ctx, (ID3D11Resource *)s_blit_cb, 0, NULL, uv, 0, 0);
+    ID3D11DeviceContext_OMSetRenderTargets(s_ctx, 1, &s_env_rtv, NULL);
+    vp.TopLeftX = 0; vp.TopLeftY = 0;
+    vp.Width = (float)ENV_W; vp.Height = (float)ENV_H;
+    vp.MinDepth = 0; vp.MaxDepth = 1;
+    ID3D11DeviceContext_RSSetViewports(s_ctx, 1, &vp);
+    ID3D11DeviceContext_RSSetState(s_ctx, NULL);
+    ID3D11DeviceContext_OMSetBlendState(s_ctx, NULL, NULL, 0xFFFFFFFFu);
+    ID3D11DeviceContext_OMSetDepthStencilState(s_ctx, NULL, 0);
+    ID3D11DeviceContext_IASetInputLayout(s_ctx, NULL);
+    ID3D11DeviceContext_IASetPrimitiveTopology(s_ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ID3D11DeviceContext_VSSetShader(s_ctx, s_blit_vs, NULL, 0);
+    ID3D11DeviceContext_VSSetConstantBuffers(s_ctx, 0, 1, &s_blit_cb);
+    ID3D11DeviceContext_PSSetShader(s_ctx, s_copy_ps, NULL, 0);
+    ID3D11DeviceContext_PSSetShaderResources(s_ctx, 0, 1, &src);
+    ID3D11DeviceContext_PSSetSamplers(s_ctx, 0, 1, &s_blit_smp);
+    ID3D11DeviceContext_Draw(s_ctx, 3, 0);
+    ID3D11DeviceContext_PSSetShaderResources(s_ctx, 0, 1, &none);
+    ID3D11DeviceContext_OMSetRenderTargets(s_ctx, 0, NULL, NULL);
+    ID3D11DeviceContext_GenerateMips(s_ctx, s_env_srv);
+    s_env_have = 1;
+    wpn_light_update();
+    bind_forget();
+}
+
 static int present_init(HWND hwnd)
 {
     IDXGIDevice *xd = NULL;
@@ -3083,6 +3945,220 @@ static void shot_take(IDXGISwapChain1 *sc)
     }
 }
 
+/* HUD bar drawn into the presented frame (the stamina bar): a vertical capsule in the HUD's grey, filled from the bottom.
+ * The game side calls nv2a_gpu_hud_bar every frame it wants the bar (any thread; lock-free, the values expire after
+ * 200 ms); the present thread draws it after the frame, inside the letterboxed picture, so it scales with the picture and
+ * is in F12 screenshots. Position and size are fractions of the picture: x, y = top-left, h = height, aspect = width/height. */
+static volatile LONG s_hb_v[5];         /* x, y, h, aspect, fill, all x 100000 */
+static volatile DWORD s_hb_until;
+static ID3D11PixelShader *s_hb_ps;
+static ID3D11Buffer *s_hb_cb;
+static ID3D11BlendState *s_hb_bs;
+static int s_hb_state;                  /* 0 not tried, 1 up, -1 failed */
+
+void nv2a_gpu_hud_bar(float x, float y, float h, float aspect, float fill)
+{
+    if (fill < 0.0f) fill = 0.0f;
+    if (fill > 1.0f) fill = 1.0f;
+    s_hb_v[0] = (LONG)(x * 100000.0f);
+    s_hb_v[1] = (LONG)(y * 100000.0f);
+    s_hb_v[2] = (LONG)(h * 100000.0f);
+    s_hb_v[3] = (LONG)(aspect * 100000.0f);
+    s_hb_v[4] = (LONG)(fill * 100000.0f + 0.5f);
+    s_hb_until = GetTickCount() + 200;
+}
+
+static const char k_hb_hlsl[] =
+    "cbuffer P : register(b1) { float4 pb; };\n"        /* bar width, height in pixels, fill 0..1, outline thickness */
+    "float4 psbar(float4 p : SV_Position, float2 uv : TEXCOORD0) : SV_Target\n"
+    "{\n"
+    "    float w = pb.x, h = pb.y, t = pb.w;\n"
+    "    float2 q = uv * float2(w, h);\n"
+    "    float r = w * 0.5;\n"
+    "    float d = length(float2(q.x - r, q.y - clamp(q.y, r, h - r))) - r;\n"      /* capsule distance, < 0 inside */
+    "    float cov = saturate(0.5 - d);\n"
+    "    float ring = saturate(d + t + 0.5);\n"
+    "    float fy = pb.z >= 0.999 ? -1.0 : (h - t) - pb.z * (h - 2.0 * t);\n"          /* top of the fill, grows upwards; full = no gap */
+    "    float fil = saturate(q.y - fy + 0.5);\n"
+    "    float solid = max(ring, fil);\n"
+    "    float3 col = lerp(float3(0.02, 0.025, 0.02), float3(0.54, 0.545, 0.54), solid);\n"
+    "    return float4(col, cov * lerp(0.40, 0.96, solid));\n"
+    "}\n";
+
+static int hud_bar_init(void)
+{
+    ID3DBlob *code = NULL, *err = NULL;
+    D3D11_BUFFER_DESC bd;
+    D3D11_BLEND_DESC bl;
+    HRESULT hr;
+
+    if (s_hb_state)
+        return s_hb_state > 0;
+    s_hb_state = -1;
+    hr = D3DCompile(k_hb_hlsl, sizeof k_hb_hlsl - 1, "hud_bar", NULL, NULL, "psbar", "ps_4_0",
+                    D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &err);
+    if (FAILED(hr)) {
+        fprintf(stderr, "[NV2A-GPU] hud bar: compile failed (0x%08lX)\n%s\n", (unsigned long)hr,
+                err ? (const char *)ID3D10Blob_GetBufferPointer(err) : "");
+        if (err) ID3D10Blob_Release(err);
+        return 0;
+    }
+    if (err) ID3D10Blob_Release(err);
+    hr = ID3D11Device_CreatePixelShader(s_dev, ID3D10Blob_GetBufferPointer(code),
+                                        ID3D10Blob_GetBufferSize(code), NULL, &s_hb_ps);
+    ID3D10Blob_Release(code);
+    if (FAILED(hr))
+        return 0;
+    memset(&bd, 0, sizeof bd);
+    bd.ByteWidth = 16;
+    bd.Usage = D3D11_USAGE_DEFAULT;
+    bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    if (FAILED(ID3D11Device_CreateBuffer(s_dev, &bd, NULL, &s_hb_cb)))
+        return 0;
+    memset(&bl, 0, sizeof bl);
+    bl.RenderTarget[0].BlendEnable = TRUE;
+    bl.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    bl.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    bl.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    bl.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    bl.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+    bl.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    bl.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    if (FAILED(ID3D11Device_CreateBlendState(s_dev, &bl, &s_hb_bs)))
+        return 0;
+    s_hb_state = 1;
+    return 1;
+}
+
+/* Called inside nv2a_gpu_present right after the frame blit: the render target is bound, the blit's VS / constant
+ * buffer / topology are set. frame = the picture's rectangle inside the window. */
+static void hud_bar_draw(const D3D11_VIEWPORT *frame)
+{
+    D3D11_VIEWPORT vp;
+    float pb[4], bw, bh;
+
+    if ((int)(s_hb_until - GetTickCount()) <= 0 || !hud_bar_init())
+        return;
+    bh = (float)(int)(frame->Height * (float)s_hb_v[2] * 0.00001f + 0.5f);
+    bw = (float)(int)(bh * (float)s_hb_v[3] * 0.00001f + 0.5f);
+    if (bw < 4.0f || bh < 8.0f)
+        return;
+    vp.TopLeftX = (float)(int)(frame->TopLeftX + frame->Width * (float)s_hb_v[0] * 0.00001f + 0.5f);
+    vp.TopLeftY = (float)(int)(frame->TopLeftY + frame->Height * (float)s_hb_v[1] * 0.00001f + 0.5f);
+    vp.Width = bw;
+    vp.Height = bh;
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    pb[0] = bw;
+    pb[1] = bh;
+    pb[2] = (float)s_hb_v[4] * 0.00001f;
+    pb[3] = bw * 0.10f > 1.5f ? bw * 0.10f : 1.5f;
+    ID3D11DeviceContext_UpdateSubresource(s_ctx, (ID3D11Resource *)s_hb_cb, 0, NULL, pb, 0, 0);
+    ID3D11DeviceContext_RSSetViewports(s_ctx, 1, &vp);
+    ID3D11DeviceContext_OMSetBlendState(s_ctx, s_hb_bs, NULL, 0xFFFFFFFFu);
+    ID3D11DeviceContext_PSSetShader(s_ctx, s_hb_ps, NULL, 0);
+    ID3D11DeviceContext_PSSetConstantBuffers(s_ctx, 1, 1, &s_hb_cb);
+    ID3D11DeviceContext_Draw(s_ctx, 3, 0);
+    ID3D11DeviceContext_OMSetBlendState(s_ctx, NULL, NULL, 0xFFFFFFFFu);
+}
+
+/* Hit marker drawn into the presented frame: an X of four short diagonal strokes around the picture's centre, white for a
+ * hit and red for a kill. The game side calls nv2a_gpu_hud_hitmark(kind) once per hit (any thread; lock-free); the present
+ * thread draws it for HM_MS, popping in and fading out. It shares the bar's blend state and constant buffer. */
+#define HM_MS 320
+static volatile LONG s_hm_kind;          /* 0 none, 1 white (hit), 2 red (kill) */
+static volatile DWORD s_hm_t0;
+static ID3D11PixelShader *s_hm_ps;
+static int s_hm_state;                   /* 0 not tried, 1 up, -1 failed */
+
+void nv2a_gpu_hud_hitmark(int kind)
+{
+    s_hm_t0 = GetTickCount();
+    s_hm_kind = kind == 2 ? 2 : 1;
+}
+
+static const char k_hm_hlsl[] =
+    "cbuffer P : register(b1) { float4 pb; };\n"        /* size in pixels, stroke half-width in pixels, kind (1 white, 2 red), alpha */
+    "float4 psx(float4 p : SV_Position, float2 uv : TEXCOORD0) : SV_Target\n"
+    "{\n"
+    "    float2 q = abs(uv - 0.5) * 2.0;\n"                                         /* one quadrant, 0..1 each way */
+    "    float t = (q.x + q.y) * 0.70710678;\n"                                      /* distance along the diagonal */
+    "    float2 c = clamp(t, 0.30, 0.92) * float2(0.70710678, 0.70710678);\n"       /* stroke runs from 0.30 to 0.92 */
+    "    float d = length(q - c) * pb.x * 0.5;\n"                                    /* pixels from the stroke's centre line */
+    "    float core = saturate(pb.y + 0.5 - d);\n"
+    "    float glow = saturate(1.0 - (d - pb.y) / (pb.y * 2.2 + 1.0)) * 0.30;\n"
+    "    float3 col = pb.z > 1.5 ? float3(0.95, 0.10, 0.08) : float3(1.0, 1.0, 1.0);\n"
+    "    float a = saturate(core + glow * (1.0 - core)) * pb.w;\n"
+    "    return float4(lerp(float3(0.0, 0.0, 0.0), col, saturate(core + 0.55)), a);\n"
+    "}\n";
+
+static int hud_mark_init(void)
+{
+    ID3DBlob *code = NULL, *err = NULL;
+    HRESULT hr;
+
+    if (s_hm_state)
+        return s_hm_state > 0;
+    s_hm_state = -1;
+    if (!hud_bar_init())                     /* the blend state and the constant buffer live there */
+        return 0;
+    hr = D3DCompile(k_hm_hlsl, sizeof k_hm_hlsl - 1, "hud_mark", NULL, NULL, "psx", "ps_4_0",
+                    D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &err);
+    if (FAILED(hr)) {
+        fprintf(stderr, "[NV2A-GPU] hit marker: compile failed (0x%08lX)\n%s\n", (unsigned long)hr,
+                err ? (const char *)ID3D10Blob_GetBufferPointer(err) : "");
+        if (err) ID3D10Blob_Release(err);
+        return 0;
+    }
+    if (err) ID3D10Blob_Release(err);
+    hr = ID3D11Device_CreatePixelShader(s_dev, ID3D10Blob_GetBufferPointer(code),
+                                        ID3D10Blob_GetBufferSize(code), NULL, &s_hm_ps);
+    ID3D10Blob_Release(code);
+    if (FAILED(hr))
+        return 0;
+    s_hm_state = 1;
+    return 1;
+}
+
+static void hud_mark_draw(const D3D11_VIEWPORT *frame)
+{
+    D3D11_VIEWPORT vp;
+    float pb[4], side, age, a, pop;
+    LONG kind = s_hm_kind;
+
+    if (!kind)
+        return;
+    age = (float)(int)(GetTickCount() - s_hm_t0);
+    if (age < 0.0f || age >= (float)HM_MS) {
+        s_hm_kind = 0;
+        return;
+    }
+    if (!hud_mark_init())
+        return;
+    pop = age < 70.0f ? 1.0f + 0.25f * (1.0f - age / 70.0f) : 1.0f;                 /* a quick pop-in */
+    a = age < 190.0f ? 1.0f : 1.0f - (age - 190.0f) / ((float)HM_MS - 190.0f);        /* then a fade */
+    side = (float)(int)(frame->Height * 0.058f * pop + 0.5f);
+    if (side < 12.0f)
+        return;
+    vp.TopLeftX = (float)(int)(frame->TopLeftX + frame->Width * 0.5f - side * 0.5f + 0.5f);
+    vp.TopLeftY = (float)(int)(frame->TopLeftY + frame->Height * 0.5f - side * 0.5f + 0.5f);
+    vp.Width = side;
+    vp.Height = side;
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    pb[0] = side;
+    pb[1] = side * 0.030f > 1.0f ? side * 0.030f : 1.0f;
+    pb[2] = (float)kind;
+    pb[3] = a;
+    ID3D11DeviceContext_UpdateSubresource(s_ctx, (ID3D11Resource *)s_hb_cb, 0, NULL, pb, 0, 0);
+    ID3D11DeviceContext_RSSetViewports(s_ctx, 1, &vp);
+    ID3D11DeviceContext_OMSetBlendState(s_ctx, s_hb_bs, NULL, 0xFFFFFFFFu);
+    ID3D11DeviceContext_PSSetShader(s_ctx, s_hm_ps, NULL, 0);
+    ID3D11DeviceContext_PSSetConstantBuffers(s_ctx, 1, 1, &s_hb_cb);
+    ID3D11DeviceContext_Draw(s_ctx, 3, 0);
+    ID3D11DeviceContext_OMSetBlendState(s_ctx, NULL, NULL, 0xFFFFFFFFu);
+}
+
 int nv2a_gpu_present(uint32_t va, uint32_t logical_w, uint32_t logical_h,
                      float aa_sx, float aa_sy, void *hwnd_)
 {
@@ -3161,6 +4237,8 @@ int nv2a_gpu_present(uint32_t va, uint32_t logical_w, uint32_t logical_h,
             wide = e && e[0] == '1';
         }
         asp = wide ? 16.0f / 9.0f : (float)logical_w / (float)logical_h;
+        recomp_wide_client(cw, ch);
+        asp = recomp_present_aspect(asp);
         if ((float)cw <= (float)ch * asp) {
             w = cw;
             h = (UINT)((float)cw / asp + 0.5f);
@@ -3173,6 +4251,7 @@ int nv2a_gpu_present(uint32_t va, uint32_t logical_w, uint32_t logical_h,
         uv[2] = uv[3] = 0.0f;
         if (uv[0] > 1.0f) uv[0] = 1.0f;
         if (uv[1] > 1.0f) uv[1] = 1.0f;
+        wpn_env_capture(s->srv, uv);
         ID3D11DeviceContext_UpdateSubresource(s_ctx, (ID3D11Resource *)s_blit_cb,
                                               0, NULL, uv, 0, 0);
         ID3D11DeviceContext_OMSetRenderTargets(s_ctx, 1, &s_sc_rtv, NULL);
@@ -3197,12 +4276,25 @@ int nv2a_gpu_present(uint32_t va, uint32_t logical_w, uint32_t logical_h,
         ID3D11DeviceContext_PSSetSamplers(s_ctx, 0, 1, &s_blit_smp);
         ID3D11DeviceContext_Draw(s_ctx, 3, 0);
         ID3D11DeviceContext_PSSetShaderResources(s_ctx, 0, 1, &none);
+        hud_bar_draw(&vp);
+        hud_mark_draw(&vp);
         ID3D11DeviceContext_OMSetRenderTargets(s_ctx, 0, NULL, NULL);
         bind_forget();
     }
     if (InterlockedExchange(&g_screenshot_request, 0))
         shot_take(s_sc);
-    IDXGISwapChain1_Present(s_sc, 0, 0);
+    {
+        HRESULT phr = IDXGISwapChain1_Present(s_sc, 0, 0);
+        if (FAILED(phr)) {      /* a driver reset or a lost GPU after a long session looks like a silent close: say so, once */
+            static int said;
+            if (!said) {
+                said = 1;
+                fprintf(stderr, "[DXGI] Present failed 0x%08lX; device removed reason 0x%08lX\n", (unsigned long)phr,
+                        (unsigned long)ID3D11Device_GetDeviceRemovedReason(s_dev));
+                fflush(stderr);
+            }
+        }
+    }
     return 1;
 }
 
@@ -3220,10 +4312,29 @@ void nv2a_gpu_cpu_write(uint32_t va, uint32_t bytes, int after)
 { (void)va; (void)bytes; (void)after; }
 uint32_t nv2a_gpu_zpass_collect(void) { return 0; }
 void nv2a_gpu_frame(void) {}
+void nv2a_gpu_weapon_get_tan(float *h, float *v) { *h = *v = 0.0f; }
+void nv2a_gpu_weapon_config(int level) { (void)level; }
+int  nv2a_gpu_weapon_level(void) { return 0; }
+void nv2a_gpu_weapon_view(float h, float v) { (void)h; (void)v; }
+void nv2a_gpu_weapon_trigger(int k, float s) { (void)k; (void)s; }
+void nv2a_gpu_weapon_rain(float s) { (void)s; }
+void nv2a_gpu_weapon_clean(void) {}
+void nv2a_gpu_weapon_blood_color(float r, float g, float b) { (void)r; (void)g; (void)b; }
+void nv2a_gpu_weapon_offset(float x, float y) { (void)x; (void)y; }
+void nv2a_gpu_weapon_aim(float f) { (void)f; }
 int nv2a_gpu_present(uint32_t va, uint32_t lw, uint32_t lh, float sx, float sy,
                      void *hwnd)
 { (void)va; (void)lw; (void)lh; (void)sx; (void)sy; (void)hwnd; return 0; }
 void nv2a_gpu_present_stop(void) {}
+void nv2a_gpu_hud_bar(float x, float y, float h, float aspect, float fill)
+{ (void)x; (void)y; (void)h; (void)aspect; (void)fill; }
+void nv2a_gpu_hud_hitmark(int kind) { (void)kind; }
+float recomp_wide_target(void) { return 0.0f; }
+void recomp_wide_frame(float asp) { (void)asp; }
+float recomp_present_aspect(float dflt) { return dflt; }
+float recomp_wide_hud_k(void) { return 0.0f; }
+void recomp_wide_set_gate(int (*gate)(void)) { (void)gate; }
+void recomp_wide_client(unsigned cw, unsigned ch) { (void)cw; (void)ch; }
 int nv2a_gpu_program_ok(void) { return 0; }
 int nv2a_gpu_program_capture(float *out) { (void)out; return 0; }
 void nv2a_gpu_draw_program(const Nv2aGpuState *st, const Nv2aGpuProgram *pg,

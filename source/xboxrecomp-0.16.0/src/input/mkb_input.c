@@ -306,7 +306,22 @@ static void mkb_load_config(void)
  * choices in recomp_settings.ini beside the exe; the mouse speed and the
  * vertical invert are read here, after mkb.ini, so the menu's choice wins. */
 static int s_icon_mode;                      /* 0 follow the last device used, 1 gamepad, 2 keyboard and mouse */
-static int s_icon_style;                     /* the gamepad art: 0 Xbox, 1 PlayStation */
+static int s_icon_style;                     /* the gamepad art: 0 Xbox, 1 Xbox 360, 2 PS2/PS3, 3 PS4, 4 PS5 */
+
+/* the ini / launcher value; the old "ps" is the newest PlayStation set */
+void mkb_set_icon_style_name(const char *v)
+{
+    if (!strncmp(v, "xbox360", 7) || !strncmp(v, "360", 3))
+        s_icon_style = 1;
+    else if (!strncmp(v, "ps2", 3) || !strncmp(v, "ps3", 3))
+        s_icon_style = 2;
+    else if (!strncmp(v, "ps4", 3))
+        s_icon_style = 3;
+    else if (!strncmp(v, "ps", 2) || !strncmp(v, "play", 4))
+        s_icon_style = 4;
+    else
+        s_icon_style = 0;
+}
 
 static void mkb_load_rs_settings(void)
 {
@@ -334,7 +349,7 @@ static void mkb_load_rs_settings(void)
         else if (!strncmp(line, "icons=", 6))
             s_icon_mode = !strncmp(line + 6, "pad", 3) ? 1 : !strncmp(line + 6, "key", 3) ? 2 : 0;
         else if (!strncmp(line, "icon_style=", 11))
-            s_icon_style = !strncmp(line + 11, "ps", 2) || !strncmp(line + 11, "play", 4);
+            mkb_set_icon_style_name(line + 11);
         else {
             char *eq = strchr(line, '=');
             if (eq) {
@@ -374,11 +389,33 @@ static volatile unsigned char s_vk_tap[256];  /* pressed since the last poll */
 /* F6 / F7 while playing: -1 / +1 steps of the title's own field-of-view setting.
  * The title reads and clears it (mygame recomp_manual.c). */
 volatile LONG g_mkb_fov_steps;
+volatile int g_mkb_aim_held;        /* SCOPE SWAY: the Aim button (left trigger, right mouse) is down in the merged pad state */
+volatile int g_mkb_fire_held;       /* RUN POSE: the Fire button (right trigger, left mouse) is down in the merged pad state */
 volatile unsigned g_mkb_last_btn;     /* ZOOMPROBE: the merged pad state of the last poll (buttons, bits 16-21 = analog A B X Y Black White, 22 LT, 23 RT) */
 volatile LONG g_mkb_zoom_steps;
+volatile int g_mkb_real_pad;          /* WHEELDIAG: 1 while XInput reports a physical pad on game port 0 */
 volatile unsigned g_mkb_rt_presses;   /* fire-rate gate: physical right-trigger presses */
 volatile double g_mkb_gate_until_ms;    /* fire-rate gate: trigger reads released until this QPC time (ms) */
+volatile double g_mkb_inject_weapon_until_ms;   /* auto switch weapon: the console B (Change weapon) reads pressed until this QPC time (ms) */
 volatile int g_mkb_scoped;           /* set by the port while a scope is up (game fov under 60 degrees) */      /* scope zoom: wheel notches and numpad +/- in play (+ = zoom in); the port uses them only while a scope is up */
+/* GRENADE MACRO (Recomp Settings > Controls; ini grenade_macro, env RECOMP_GRENADE_MACRO). The grenade control (keys 4 / Up, or the
+ * pad's D-pad up) takes the grenade out, waits until it is in the hands (g_mkb_gren_held, set each frame by the port), pulls the pin
+ * (Action) and holds fire; releasing the control throws it. After the throw Change weapon is pressed until the weapon that was held
+ * before (g_mkb_held_weapon, the held weapon object, set by the port) is back in the hands. The mouse wheel is Change weapon
+ * (outside a scope and a menu); in a scope it stays the zoom. */
+static int s_gren_macro = -1;
+volatile int g_mkb_gren_held = -1;          /* 1 a grenade is in the player's hands, 0 a gun, -1 not known (set by the port) */
+volatile unsigned g_mkb_held_weapon;        /* the held weapon object (guest address), 0 = not known (set by the port) */
+int mkb_gren_macro_get(void)
+{
+    if (s_gren_macro < 0) {
+        const char *e = getenv("RECOMP_GRENADE_MACRO");
+        s_gren_macro = e && e[0] == '1' ? 1 : 0;
+    }
+    return s_gren_macro;
+}
+void mkb_gren_macro_set(int on) { mkb_gren_macro_get(); s_gren_macro = on ? 1 : 0; }
+
 volatile LONG g_mkb_fog_steps;          /* F2 / F3: fog distance multiplier down / up */
 volatile LONG g_mkb_draw_steps;         /* F4 / F5: draw distance multiplier down / up */
 volatile LONG g_mkb_pin_toggles;        /* F8: game loop on its own core on / off (mygame main.c) */
@@ -395,6 +432,7 @@ static volatile DWORD s_kb_a_until;           /* the A button is held until this
 static int s_kb_on;                           /* the keyboard screen is up (this poll) */
 
 static volatile LONG s_active = 1;   /* F9 toggles this               */
+volatile LONG g_mkb_free_cursor;     /* the map editor's window is up: the pointer stays free and visible (set by the game's editor code) */
 static volatile LONG s_thread_up;
 
 /* F9 is read on the input thread, so the toggle works even while the
@@ -1366,6 +1404,8 @@ static int kb_handle(const uint32_t *items, const float *ys, int n, uint32_t tab
  * be found -- the caller then steps with the mouse instead. */
 /* The pointer found a row of items to aim at on its last poll. */
 static int s_hover_ok;
+static int s_hover_allm;                /* the pointer's targets are every selectable row (a map-like screen), not an evenly spaced chain */
+static volatile int s_hover_pending;   /* the free pointer's highlight is still walking to the row under the pointer: a click waits (mkb_merge) */
 
 /* A horizontal menu (the pause menu: Resume Options Restart Quit): 3 to 8
  * widgets at one height, evenly spaced in x; the focused one is the widget in
@@ -1452,12 +1492,90 @@ static int hmenu_handle(uint32_t tab, WORD *b)
             for (j = 0; j < m; j++) { xs[j] = a[j]; row[j] = r[j]; st[j] = s[j]; }
         }
     }
+    {   /* The pause menu's button row is reachable from the focus table only for a moment while it opens (about 1.15 s), then
+         * the table holds nothing but a lone container until the highlight enters the row: a pointer that moved later found
+         * no row and waited seconds. So the row is remembered (per menu opening) and used again while the table holds no list. */
+        static uint32_t c_row[8], c_y_bits;
+        static int c_n;
+        static DWORD c_tick;
+        if (gn) {
+            for (j = 0; j < gn; j++)
+                c_row[j] = row[j];
+            c_n = gn;
+            c_tick = s_menu_on_tick;
+            memcpy(&c_y_bits, &gy, sizeof gy);
+        } else if (c_n >= 3 && c_tick == s_menu_on_tick) {
+            int big = 0, ok = 1;
+            float cy;
+            memcpy(&cy, &c_y_bits, sizeof cy);
+            for (k = 0; k < 8; k++) {       /* any slot with a real list (an Options screen, a mission list): not this menu */
+                uint32_t k0 = g32(tab + 4u * (uint32_t)k), w2;
+                int cnt = 0, g2;
+                if (!widget_ok(k0))
+                    continue;
+                for (w2 = k0, g2 = 0; g2 < 64; g2++) {
+                    uint32_t pv = g32(w2 + s_widget_prev);
+                    if (!widget_ok(pv) || g32(pv + s_widget_next) != w2)
+                        break;
+                    w2 = pv;
+                }
+                for (g2 = 0; g2 < 64 && widget_ok(w2); g2++) {
+                    uint32_t nx = g32(w2 + s_widget_next);
+                    cnt++;
+                    if (!widget_ok(nx) || g32(nx + s_widget_prev) != w2)
+                        break;
+                    w2 = nx;
+                }
+                if (cnt > 3)
+                    big = 1;
+            }
+            for (j = 0; j < c_n && ok && !big; j++) {
+                float x;
+                if (!widget_ok(c_row[j]) || ((g32(c_row[j] + 4) >> 16) & 0xF) < 4 ||
+                    fabsf(widget_abs_y(c_row[j]) - cy) >= 1.0f)
+                    ok = 0;
+                x = gf(c_row[j] + 0x20);
+                if (!(x > 0.0f && x < 1000.0f))
+                    ok = 0;
+                xs[j] = x;
+                row[j] = c_row[j];
+                st[j] = (int)((g32(c_row[j] + 4) >> 16) & 0xF);
+            }
+            d = c_n > 1 ? (xs[c_n - 1] - xs[0]) / (float)(c_n - 1) : 0.0f;
+            if (ok && !big && d >= 40.0f && d <= 260.0f) {
+                gn = c_n;
+                gy = cy;
+                first = row[0];
+            }
+        }
+    }
     if (!gn) {
         static DWORD nolog;
         if (now - s_menu_on_tick < 8000u && now - nolog >= 500u) {
             nolog = now;
             fprintf(stderr, "  [PAUSE] +%lu ms: no button row yet (table %08X, slots %08X %08X %08X %08X)\n",
                     (unsigned long)(now - s_menu_on_tick), tab, g32(tab), g32(tab + 4), g32(tab + 8), g32(tab + 12));
+            for (k = 0; k < 8; k++) {   /* what each slot's widget is: state, height, x, and how many siblings its list has */
+                uint32_t k0 = g32(tab + 4u * (uint32_t)k), w2;
+                int cnt = 0, g2;
+                if (!widget_ok(k0))
+                    continue;
+                for (w2 = k0, g2 = 0; g2 < 64; g2++) {
+                    uint32_t pv = g32(w2 + s_widget_prev);
+                    if (!widget_ok(pv) || g32(pv + s_widget_next) != w2)
+                        break;
+                    w2 = pv;
+                }
+                for (g2 = 0; g2 < 64 && widget_ok(w2); g2++) {
+                    uint32_t nx = g32(w2 + s_widget_next);
+                    cnt++;
+                    if (!widget_ok(nx) || g32(nx + s_widget_prev) != w2)
+                        break;
+                    w2 = nx;
+                }
+                fprintf(stderr, "    [PAUSE-SLOT] %d: %08X state %X y %.0f x %.0f list %d\n", k, k0,
+                        (g32(k0 + 4) >> 16) & 0xF, (double)widget_abs_y(k0), (double)gf(k0 + 0x20), cnt);
+            }
         }
         return 0;
     }
@@ -1565,6 +1683,76 @@ static int hmenu_handle(uint32_t tab, WORD *b)
     return 1;
 }
 
+/* MAP screens (campaigns, the missions of a campaign): where each d-pad press takes the highlight is not
+ * guessable from the positions (the log showed it cycling through the markers in list order, and one lit
+ * widget that is no choice at all). So it is learned: every press is recorded (from widget, direction ->
+ * widget it landed on) and the next steps follow the recorded edges to the wanted marker; a direction not tried
+ * yet from the current marker is tried in the order of how well it points at the target. A marker no
+ * recorded path reaches is dropped (banned) until the mouse moves again. */
+static struct { uint32_t from, to; WORD dir; DWORD t; } s_mtr[96];
+static int s_mntr;
+static uint32_t s_msig, s_mban[16];
+static int s_mnban;
+static const WORD s_mdirs[4] = { XBOX_GAMEPAD_DPAD_RIGHT, XBOX_GAMEPAD_DPAD_LEFT, XBOX_GAMEPAD_DPAD_DOWN, XBOX_GAMEPAD_DPAD_UP };
+
+static int mtr_get(uint32_t from, WORD dir, uint32_t *to)
+{
+    int i;
+    for (i = 0; i < s_mntr; i++)
+        if (s_mtr[i].from == from && s_mtr[i].dir == dir) {
+            /* "the press went nowhere" may be a press the game took late or lost: believed for a second only */
+            if (s_mtr[i].to == from && GetTickCount() - s_mtr[i].t > 1000u)
+                return 0;
+            *to = s_mtr[i].to;
+            return 1;
+        }
+    return 0;
+}
+
+static void mtr_set(uint32_t from, WORD dir, uint32_t to)
+{
+    int i;
+    for (i = 0; i < s_mntr; i++)
+        if (s_mtr[i].from == from && s_mtr[i].dir == dir) { s_mtr[i].to = to; s_mtr[i].t = GetTickCount(); return; }
+    if (s_mntr < 96) {
+        s_mtr[s_mntr].from = from;
+        s_mtr[s_mntr].dir = dir;
+        s_mtr[s_mntr].to = to;
+        s_mtr[s_mntr].t = GetTickCount();
+        s_mntr++;
+    }
+}
+
+/* The first press of the shortest recorded path from `from` to `goal`; with goal 0, to the nearest other widget that
+ * still has a direction not tried (*found = it). 0 when there is none. */
+static WORD mtr_bfs(uint32_t from, uint32_t goal, uint32_t *found, int d0)
+{
+    uint32_t q[100];
+    WORD fd[100];
+    int qh = 0, qt = 0, d, j;
+    q[qt] = from;
+    fd[qt++] = 0;
+    while (qh < qt) {
+        uint32_t u = q[qh];
+        WORD uf = fd[qh++];
+        for (d = d0; d < 4; d++) {
+            uint32_t v;
+            WORD first = uf ? uf : s_mdirs[d];
+            if (!mtr_get(u, s_mdirs[d], &v)) {
+                if (!goal && u != from) { *found = u; return uf; }
+                continue;
+            }
+            if (v == u)
+                continue;
+            if (goal && v == goal)
+                return first;
+            for (j = 0; j < qt && q[j] != v; j++) ;
+            if (j == qt && qt < 100) { q[qt] = v; fd[qt++] = first; }
+        }
+    }
+    return 0;
+}
+
 static int menu_hover(WORD *b)
 {
     static DWORD on_until, off_until;
@@ -1577,6 +1765,7 @@ static int menu_hover(WORD *b)
     static int presses;
     static uint32_t pressed_from;   /* the focus a press left from */
     static WORD pressed_dir;        /* ... its direction, from height, to height */
+    static int pressed_map;         /* ... that press was a map screen's (left / right / up / down), no wrap check */
     static float pressed_y, pressed_ty;
     static float dead_y[8];         /* heights the highlight never reaches */
     static int ndead;
@@ -1589,6 +1778,7 @@ static int menu_hover(WORD *b)
                               : GetForegroundWindow();
     DWORD now = GetTickCount();
 
+    s_hover_pending = 0;
     if (!s_menu_focus || !fg)
         return 0;
     {   /* RECOMP_MENU_DEBUG=1: the whole focus table whenever it changes */
@@ -1728,6 +1918,21 @@ static int menu_hover(WORD *b)
             }
         }
     }
+    {   /* The mission screens (St Nazaire, Russia): the states of the lit mission and of its neighbours tie (Operation: Chariot
+         * lit read as Escape at dawn: the log showed the raw slot on 488/303 while the guess said 463/147, so the pointer
+         * pressed again and the highlight jumped on). The slot widget itself names the focus there. */
+        static const float mw[6][2] = { { 488.0f, 303.0f }, { 561.0f, 255.0f }, { 352.0f, 209.0f }, { 463.0f, 147.0f },
+                                        { 383.0f, 294.0f }, { 465.0f, 214.0f } };
+        uint32_t sw = g32(tab + s_menu_focus_off);
+        if (n >= 2 && widget_ok(sw)) {
+            float sx = gf(sw + 0x20), sy = widget_abs_y(sw);
+            int mi2, ii;
+            for (mi2 = 0; mi2 < 6; mi2++)
+                if (fabsf(sx - mw[mi2][0]) < 3.0f && fabsf(sy - mw[mi2][1]) < 4.0f)
+                    for (ii = 0; ii < n; ii++)
+                        if (items[ii] == sw) { f = sw; cur = ii; mi2 = 6; break; }
+        }
+    }
     if (!f || cur < 0 || n < 2) {
         /* The sub-menus (Game Settings, Audio/Video) leave their rows out
          * of the focus table until the first d-pad press: it holds only the
@@ -1800,12 +2005,13 @@ static int menu_hover(WORD *b)
             fprintf(stderr, "  [MKB] menu focus %d of %d (y %.0f, items %.0f..%.0f) states", cur, n,
                     ys[cur], ys[0], ys[n - 1]);
             for (k = 0; k < n; k++)
-                fprintf(stderr, " %X@%.0f", (g32(items[k] + 4) >> 16) & 0xF, ys[k]);
+                fprintf(stderr, " %X@%.0f/%.0f", (g32(items[k] + 4) >> 16) & 0xF, ys[k], (double)gf(items[k] + 0x20));
             fprintf(stderr, "\n");
             fflush(stderr);
         }
     }
 
+    s_hover_pending = 1;                /* until the checks below find the highlight on the row under the pointer */
     if ((LONG)(on_until - now) > 0) { *b |= held; return 1; }
     if ((LONG)(off_until - now) > 0) return 1;
     /* After a press, the next step waits until the menu has moved (or a
@@ -1818,7 +2024,7 @@ static int menu_hover(WORD *b)
         prev_f = f;
         if (pressed_from && f == pressed_from && (LONG)(settle_until - now) > 0)
             return 1;
-        if (pressed_from && f != pressed_from) {
+        if (pressed_from && f != pressed_from && !pressed_map) {
             settle_until = now;
             /* The press wrapped round (down landed higher, up lower): the
              * target is not a row the highlight reaches (Audio/Video keeps
@@ -1839,6 +2045,32 @@ static int menu_hover(WORD *b)
                 return 1;
             }
         }
+        if (pressed_map && pressed_from && pressed_dir) {
+            static unsigned elog;
+            static uint32_t nf_from;
+            static WORD nf_dir;
+            static int nf_cnt;
+            /* where that press took the highlight. "Nowhere" is believed only on the second try of the same press: the game
+             * drops presses while its highlight is still moving (the log showed one press move, the same press later do
+             * nothing) */
+            if (f != pressed_from) {
+                nf_cnt = 0;
+                mtr_set(pressed_from, pressed_dir, f);
+            } else {
+                nf_cnt = (nf_from == pressed_from && nf_dir == pressed_dir) ? nf_cnt + 1 : 1;
+                nf_from = pressed_from;
+                nf_dir = pressed_dir;
+                if (nf_cnt >= 2)
+                    mtr_set(pressed_from, pressed_dir, f);
+            }
+            if (elog < 400) {
+                elog++;
+                fprintf(stderr, "  [AIM-MAP] edge (%.0f,%.0f) %s -> (%.0f,%.0f)%s\n", gf(pressed_from + 0x20), widget_abs_y(pressed_from),
+                        pressed_dir == XBOX_GAMEPAD_DPAD_RIGHT ? "RIGHT" : pressed_dir == XBOX_GAMEPAD_DPAD_LEFT ? "LEFT" :
+                        pressed_dir == XBOX_GAMEPAD_DPAD_DOWN ? "DOWN" : "UP", gf(f + 0x20), widget_abs_y(f),
+                        f == pressed_from ? " (nowhere)" : "");
+            }
+        }
         pressed_from = 0;
         if (!stable)
             return 1;
@@ -1853,8 +2085,187 @@ static int menu_hover(WORD *b)
         static int primed;
         if (!primed) { primed = 1; last = pt; }  /* no move until the mouse moves */
     }
-    if (pt.x != last.x || pt.y != last.y) { moved = 1; presses = 0; last = pt; }
+    if (pt.x != last.x || pt.y != last.y) { moved = 1; presses = 0; last = pt; s_mnban = 0; }
     my = (float)pt.y * 480.0f / (float)rc.bottom;
+    pressed_map = 0;
+    {   /* A MAP screen (the campaigns, the missions of a campaign): the choices are markers placed over a map, each at its own
+         * x and y -- not a column. The vertical logic below cannot reach a marker that is level with another (Russia, the first
+         * mission were never reachable). Such a screen is told by its selectable widgets sharing no x (a list's rows share
+         * one). The pointer picks the marker nearest to it and the highlight is walked there by d-pad presses along the
+         * larger of the two distances (left / right or up / down). */
+        /* Only the CAMPAIGN SELECT screen is a map so far. Its widgets sit at the label's right edge (x) and row (y), not
+         * where the dot is drawn, so each campaign is told by its widget's (x, y) and hit-tested against the drawn dot and
+         * label, given in a 2000x1125 picture of the frame (measured from a 16:9 screenshot; the frame is the same 640x480
+         * game picture at any window shape, so the same fractions hold; the window's black bars are taken out below). */
+        static const struct { float wx, wy, dx, dy, x0, y0, x1, y1; } cm[10] = {
+            { 348.5f, 154.0f,  756.0f, 420.0f,  385.0f, 335.0f, 1080.0f, 395.0f },   /* Battle of the Bulge */
+            { 578.5f, 217.0f, 1781.0f, 439.0f, 1615.0f, 485.0f, 1825.0f, 540.0f },   /* Russia */
+            { 358.0f, 242.0f,  517.0f, 498.0f,  230.0f, 565.0f,  565.0f, 620.0f },   /* St Nazaire */
+            { 374.5f, 298.0f,  825.0f, 755.0f,  733.0f, 672.0f, 1147.0f, 725.0f },   /* North Africa */
+            /* Mission screens. A mission's widget sits at its drawn dot plus (107, -25) in 640x480 game units (checked on all
+             * four St Nazaire dots: the offset is the same for each; the log showed the screen with the 5 widgets 166/183,
+             * 488/303, 463/147, 352/209, 561/255 is ST NAZAIRE -- the entry highlight is mission 4 = 463/147 -- and the one
+             * with 285/195, 1169/247, 383/294, 465/214 is RUSSIA). The other widgets (166/183, 285/195, 1169/247) are no
+             * mission. St Nazaire: */
+            { 488.0f, 303.0f, 1192.0f, 769.0f,  815.0f, 685.0f, 1515.0f, 740.0f },   /* 1 Operation: Chariot */
+            { 561.0f, 255.0f, 1420.0f, 657.0f, 1018.0f, 575.0f, 1805.0f, 630.0f },   /* 2 Raid on St. Nazaire */
+            { 352.0f, 209.0f,  766.0f, 549.0f,  228.0f, 465.0f, 1200.0f, 520.0f },   /* 3 Lights out in the port city */
+            { 463.0f, 147.0f, 1114.0f, 405.0f,  782.0f, 320.0f, 1393.0f, 375.0f },   /* 4 Escape at dawn */
+            /* Russia (that screenshot was cropped 25 px at the top: y here is corrected): */
+            { 383.0f, 294.0f,  863.0f, 748.0f,  432.0f, 665.0f, 1242.0f, 720.0f },   /* 1 Road to Stalingrad */
+            { 465.0f, 214.0f, 1120.0f, 560.0f,  680.0f, 480.0f, 1512.0f, 530.0f }    /* 2 Climbing Mamayev Hill */
+        };
+        float cx[64], cyy[64], rd[64], pxx = 0.0f, pyy = 0.0f;
+        int mc[64], nc = 0, q, k2, vscr = 0;
+        if (rc.right > 0) {
+            float asp = getenv("RECOMP_WIDESCREEN") && getenv("RECOMP_WIDESCREEN")[0] == '1' ? 16.0f / 9.0f : 4.0f / 3.0f;
+            float vh = (float)rc.bottom, vw = vh * asp;
+            if (vw > (float)rc.right) { vw = (float)rc.right; vh = vw / asp; }
+            pxx = ((float)pt.x - ((float)rc.right - vw) * 0.5f) / vw * 2000.0f;
+            pyy = ((float)pt.y - ((float)rc.bottom - vh) * 0.5f) / vh * 1125.0f;
+            for (q = 0; q < n && nc < 60; q++) {
+                float x = gf(items[q] + 0x20);
+                for (k2 = 0; k2 < 10; k2++)
+                    if (fabsf(x - cm[k2].wx) < 3.0f && fabsf(ys[q] - cm[k2].wy) < 4.0f) {
+                        float ex = pxx < cm[k2].x0 ? cm[k2].x0 - pxx : pxx > cm[k2].x1 ? pxx - cm[k2].x1 : 0.0f;
+                        float ey = pyy < cm[k2].y0 ? cm[k2].y0 - pyy : pyy > cm[k2].y1 ? pyy - cm[k2].y1 : 0.0f;
+                        float dl = sqrtf(ex * ex + ey * ey);    /* to the label */
+                        float dd = sqrtf((pxx - cm[k2].dx) * (pxx - cm[k2].dx) + (pyy - cm[k2].dy) * (pyy - cm[k2].dy));
+                        mc[nc] = q;
+                        cx[nc] = x;
+                        cyy[nc] = ys[q];
+                        rd[nc] = dl < dd ? dl : dd;             /* to the dot */
+                        if (k2 >= 4) {
+                            /* A mission screen is a vertical list for the game (up / down, wrapping): only the pointer's
+                             * height counts, so a marker is chosen by the dot nearest in height, wherever the pointer is
+                             * along it. Operation: Chariot (index 4) is never lit by the game's own d-pad (the log: every
+                             * lap of up / down / left / right skipped it): the pointer leaves it alone. */
+                            vscr = 1;
+                            /* the mission's own band: from the top of its name down to its dot (the pointer in the middle
+                             * of the name counts, not only at the name's ends); 0 inside it, the distance outside */
+                            rd[nc] = pyy < cm[k2].y0 ? cm[k2].y0 - pyy : pyy > cm[k2].dy ? pyy - cm[k2].dy : 0.0f;
+                        }
+                        nc++;
+                        break;
+                    }
+            }
+            if (nc >= 2 && cur >= 0) {
+                float curx = gf(items[cur] + 0x20), bd = 1e9f;
+                static unsigned mlog;
+                uint32_t sig = 0, tw, fnd = 0, tmp;
+                int tq = -1, d, bi = -1;
+                float bs = -1e9f;
+                for (q = 0; q < nc; q++)
+                    sig = sig * 31u + items[mc[q]];
+                {   /* the raw focus table whenever it or a state changes (a mission the game's d-pad reaches that no
+                     * widget in the list shows as focused would show here) */
+                    static uint32_t last_raw;
+                    static unsigned rlog;
+                    uint32_t raw = 0;
+                    for (k = 0; k < 8; k++)
+                        raw = raw * 31u + g32(tab + 4u * (uint32_t)k);
+                    raw = raw * 31u + g32(tab + s_menu_focus_off);
+                    if (raw != last_raw && rlog < 600) {
+                        last_raw = raw;
+                        rlog++;
+                        fprintf(stderr, "  [AIM-MAP] raw focus slot %08X slots", g32(tab + s_menu_focus_off));
+                        for (k = 0; k < 8; k++) {
+                            uint32_t sw2 = g32(tab + 4u * (uint32_t)k);
+                            if (widget_ok(sw2))
+                                fprintf(stderr, " %08X(%.0f,%.0f)", sw2, (double)gf(sw2 + 0x20), (double)widget_abs_y(sw2));
+                            else
+                                fprintf(stderr, " %08X", sw2);
+                        }
+                        fprintf(stderr, " | states");
+                        for (k = 0; k < n; k++)
+                            fprintf(stderr, " %X@%.0f/%.0f", (g32(items[k] + 4) >> 16) & 0xF, ys[k], (double)gf(items[k] + 0x20));
+                        fprintf(stderr, "\n");
+                    }
+                }
+                if (sig != s_msig) {        /* another screen: forget the learned presses */
+                    s_msig = sig;
+                    s_mntr = 0;
+                    s_mnban = 0;
+                    for (q = 0; q < nc && mlog < 80; q++) {
+                        int fl;
+                        fprintf(stderr, "  [AIM-MAP] marker %d w=%08X state %X x %.0f y %.0f fields", q, (unsigned)items[mc[q]],
+                                (g32(items[mc[q]] + 4) >> 16) & 0xF, cx[q], cyy[q]);
+                        for (fl = 0x18; fl <= 0x48; fl += 4)
+                            fprintf(stderr, " %.4g", (double)gf(items[mc[q]] + (uint32_t)fl));
+                        fprintf(stderr, "\n");
+                        mlog++;
+                    }
+                }
+                for (q = 0; q < nc; q++)    /* the marker nearest the pointer */
+                    if (rd[q] < bd) { bd = rd[q]; tq = q; }
+                {
+                    static uint32_t lasttw;
+                    static unsigned tlog;
+                    uint32_t nw = tq >= 0 && bd <= 70.0f ? items[mc[tq]] : 0;
+                    if (nw != lasttw && tlog < 300) {
+                        tlog++;
+                        fprintf(stderr, "  [AIM-MAP] pointer %.0f,%.0f over %s (%.0f,%.0f) dist %.0f; focus (%.0f,%.0f) edges %d bans %d\n",
+                                pxx, pyy, nw ? "marker" : "nothing", tq >= 0 ? cx[tq] : -1.0f, tq >= 0 ? cyy[tq] : -1.0f, bd, curx, ys[cur],
+                                s_mntr, s_mnban);
+                    }
+                    lasttw = nw;
+                }
+                if (tq < 0 || bd > 70.0f) {
+                    s_hover_pending = 0;
+                    return 1;               /* not over a marker */
+                }
+                for (d = 0; d < s_mnban; d++)
+                    if (s_mban[d] == items[mc[tq]]) {
+                        s_hover_pending = 0;
+                        return 1;           /* a marker no press reaches (until the pointer moves again) */
+                    }
+                s_hover_ok = 1;
+                if (!moved || items[mc[tq]] == f)
+                    s_hover_pending = 0;
+                if (!moved)
+                    return 1;
+                if (items[mc[tq]] == f || ++presses > 40) {
+                    moved = 0;
+                    s_hover_pending = 0;
+                    return 1;
+                }
+                tw = items[mc[tq]];
+                held = mtr_bfs(f, tw, &fnd, vscr ? 2 : 0);   /* a recorded way there */
+                if (!held) {                        /* else try the direction that points at it best, not tried yet */
+                    float vx[4] = { 1.0f, -1.0f, 0.0f, 0.0f }, vy[4] = { 0.0f, 0.0f, 1.0f, -1.0f };
+                    float ddx = cx[tq] - curx, ddy = cyy[tq] - ys[cur];
+                    for (d = vscr ? 2 : 0; d < 4; d++)
+                        if (!mtr_get(f, s_mdirs[d], &tmp) && ddx * vx[d] + ddy * vy[d] > bs) {
+                            bs = ddx * vx[d] + ddy * vy[d];
+                            bi = d;
+                        }
+                    if (bi >= 0)
+                        held = s_mdirs[bi];
+                    else
+                        held = mtr_bfs(f, 0, &fnd, vscr ? 2 : 0); /* all tried here: on to a widget that has an untried one */
+                }
+                if (!held) {                        /* no way found: this marker is not a choice */
+                    static unsigned blog;
+                    if (s_mnban < 16)
+                        s_mban[s_mnban++] = tw;
+                    if (blog++ < 100)
+                        fprintf(stderr, "  [AIM-MAP] no press reaches (%.0f,%.0f) from (%.0f,%.0f) (%d edges known)\n", cx[tq], cyy[tq],
+                                curx, ys[cur], s_mntr);
+                    return 1;
+                }
+                on_until = now + 35;
+                off_until = now + 70;
+                pressed_from = f;
+                pressed_map = 1;
+                pressed_dir = held;
+                pressed_y = ys[cur];
+                pressed_ty = cyy[tq];
+                *settle_deadline = now + 400;
+                *b |= held;
+                return 1;
+            }
+        }
+    }
     /* The selectable items: the run around the focused one whose rows are
      * evenly spaced. The list also holds titles and prompts, which the
      * highlight cannot reach -- aiming at one would press forever. */
@@ -1918,12 +2329,38 @@ static int menu_hover(WORD *b)
                 }
             }
         }
+        s_hover_allm = 0;
+        {
+            /* A map-like screen (the missions of a campaign, the campaigns themselves): the rows are placed by hand, not evenly
+             * spaced, so a chain of equal steps leaves some out (a mission 23 lines from its neighbour and 54 from the next
+             * could never be reached). Every other selectable-looking row more than 12 lines from a chain row joins the targets;
+             * one that cannot be reached is found out by the presses (below) and given up. */
+            int q, c2, added = 0;
+            for (q = 0; q < n && cnt < 60; q++) {
+                int inrun = 0;
+                if (((g32(items[q] + 4) >> 16) & 0xF) < 5 && q != cur)
+                    continue;               /* state 1-4: decorations, titles, list ends */
+                if (ys[q] < 100.0f || ys[q] > 390.0f)
+                    continue;               /* the title above, the button bar below */
+                if (q != cur && fabsf(ys[q] - ys[cur]) < 4.0f)
+                    continue;               /* a box behind the focused row */
+                for (c2 = 0; c2 < cnt; c2++)
+                    if (run[c2] == q || fabsf(ys[run[c2]] - ys[q]) < 12.0f)
+                        inrun = 1;
+                if (!inrun) {
+                    run[cnt++] = q;
+                    added++;
+                }
+            }
+            s_hover_allm = added > 0;
+        }
         s_hover_ok = 0;
         if (cnt < 2) {
             static int dbg2 = -1;
             if (dbg2 < 0) { const char *e = getenv("RECOMP_MENU_DEBUG"); dbg2 = e && *e == '1'; }
             if (dbg2 && moved)
                 fprintf(stderr, "  [AIM] no run: cur %d(y%.0f)\n", cur, ys[cur]);
+            s_hover_pending = 0;
             return 1;
         }
         lo = 0;
@@ -1937,20 +2374,42 @@ static int menu_hover(WORD *b)
                 continue;               /* found unreachable */
             if (d < best) { best = d; t = run[c]; }
         }
+        if (s_hover_allm && t >= 0) {   /* the pointer's reach is as wide as the gap to the nearest other row (at least 30) */
+            float loc = 1e9f;
+            for (c = 0; c < cnt; c++)
+                if (run[c] != t && fabsf(ys[run[c]] - ys[t]) < loc)
+                    loc = fabsf(ys[run[c]] - ys[t]);
+            sp = loc < 30.0f ? 30.0f : loc;
+        }
     }
     {   /* RECOMP_MENU_DEBUG=1: each decision, when the mouse has moved */
         static int dbg = -1;
         if (dbg < 0) { const char *e = getenv("RECOMP_MENU_DEBUG"); dbg = e && *e == '1'; }
-        if (dbg && moved)
+        static unsigned alog;
+        if ((dbg || alog < 400) && moved) {      /* the first 400 decisions are always logged (the mission list) */
+            alog++;
             fprintf(stderr, "  [AIM] my %.0f cur %d(y%.0f) t %d(y%.0f) best %.0f sp %.0f rows %d presses %d\n",
                     my, cur, ys[cur], t, t >= 0 ? ys[t] : -1.0f, best, sp, hi + 1, presses);
+        }
     }
-    if (t < 0 || best > 0.6f * sp || hi <= lo)
+    if (t < 0 || best > 0.6f * sp || hi <= lo) {
+        s_hover_pending = 0;
         return 1;                       /* not over an item: leave it */
+    }
     s_hover_ok = 1;                     /* over an item */
+    if (!moved || t == cur)
+        s_hover_pending = 0;            /* the highlight is on the row under the pointer (or the pointer is still) */
     if (!moved)
         return 1;
-    if (t == cur || ++presses > 2 * (hi - lo + 1)) { moved = 0; return 1; }
+    if (t == cur || ++presses > (s_hover_allm ? (hi - lo + 1) + 1 : 2 * (hi - lo + 1))) {
+        if (t != cur && s_hover_allm && ndead < 8) {    /* the presses never reached it: not a row (a decoy); skip it from now on */
+            dead_y[ndead++] = ys[t];
+            dead_time = now;
+        }
+        moved = 0;
+        s_hover_pending = 0;
+        return 1;
+    }
     held = ys[t] > ys[cur] ? XBOX_GAMEPAD_DPAD_DOWN : XBOX_GAMEPAD_DPAD_UP;
     on_until = now + 35;
     off_until = now + 70;
@@ -2077,13 +2536,15 @@ int mkb_merge(DWORD dwPort, XBOX_INPUT_STATE *pState)
             fprintf(stderr, "  [MKB] %s (t=%lu)\n", in_menu ? "menu keys" : "play keys",
                     (unsigned long)s_menu_on_tick);
             fflush(stderr);
+            mkb_release_all();          /* a menu opening or closing starts from clean input (a stuck button or key) */
         }
     }
     /* the pointer is free in a menu with the free pointer configured */
     if (!mkb_find_auto())
         /* the pointer is shown in a menu only while the mouse or keyboard was the last device used: a pad press
-         * hides it (the capture also parks it), a mouse move or key brings it back */
-        mkb_manage_cursor(!(in_menu && s_menu_focus) || ic_pad_is_last());
+         * hides it (the capture also parks it), a mouse move or key brings it back.
+         * g_mkb_free_cursor (the map editor's window is up) keeps it free and visible. */
+        mkb_manage_cursor(g_mkb_free_cursor ? 0 : (!(in_menu && s_menu_focus) || ic_pad_is_last()));
 
     /* While the title's look hook takes the mouse (mkb_native_aim_take),
      * the deltas are its; the stick gets them only when no hook has asked
@@ -2147,6 +2608,37 @@ int mkb_merge(DWORD dwPort, XBOX_INPUT_STATE *pState)
     if (in_menu && s_menu_focus) {        /* the free pointer; never the stepping mouse */
         s_hm_btn = btn;
         menu_hover(&b);
+        {   /* A left click on a row the highlight has not reached yet waits for it (up to 600 ms): moving the pointer and
+             * clicking at once used to select the row the highlight was still on */
+            static int prev_cl, defer;
+            static DWORD defer_until, fire_until;
+            static unsigned clog;
+            DWORD tnow = GetTickCount();
+            int cl = (int)(btn & 1);
+            if (cl && !prev_cl) {
+                if (s_hover_pending) {
+                    defer = 1;
+                    defer_until = tnow + 600u;
+                }
+                if (clog < 100) {
+                    clog++;
+                    fprintf(stderr, "[MENUCLICK] left click: hover_pending=%d hover_ok=%d deferred=%d\n",
+                            (int)s_hover_pending, s_hover_ok, defer);
+                    fflush(stderr);
+                }
+            }
+            prev_cl = cl;
+            if (defer) {
+                if (!s_hover_pending || (LONG)(defer_until - tnow) <= 0) {
+                    defer = 0;
+                    fire_until = tnow + 100u;
+                } else {
+                    btn &= ~1L;
+                }
+            }
+            if ((LONG)(fire_until - tnow) > 0)
+                btn |= 1;
+        }
         if ((LONG)(s_kb_a_until - GetTickCount()) > 0)
             analog[XBOX_BUTTON_A] = 255;  /* the keyboard screen's A press */
         dx = dy = 0;
@@ -2160,6 +2652,16 @@ int mkb_merge(DWORD dwPort, XBOX_INPUT_STATE *pState)
     {   /* the game's own scope zoom is the D-pad up / down: while a scope is up a wheel notch (up = in) is one press of it */
         static DWORD z_until;
         static WORD z_btn;
+        if (wheel) {                    /* WHEELDIAG: which gate a wheel notch meets (first 200 notches) */
+            static unsigned nlog;
+            if (nlog < 200) {
+                nlog++;
+                fprintf(stderr, "[WHEELDIAG] notch %ld in_menu=%d scoped=%d real_pad=%d menu_focus=%d menu_mouse=%d t=%lu\n",
+                        (long)wheel, in_menu, (int)g_mkb_scoped, (int)g_mkb_real_pad, (int)s_menu_focus,
+                        (int)s_menu_mouse, (unsigned long)GetTickCount());
+                fflush(stderr);
+            }
+        }
         if (!in_menu && wheel && g_mkb_scoped) {
             z_btn = wheel > 0 ? XBOX_GAMEPAD_DPAD_UP : XBOX_GAMEPAD_DPAD_DOWN;
             z_until = GetTickCount() + 90;
@@ -2167,6 +2669,17 @@ int mkb_merge(DWORD dwPort, XBOX_INPUT_STATE *pState)
         }
         if ((LONG)(z_until - GetTickCount()) > 0)
             b |= z_btn;
+    }
+
+    {   /* MOUSE WHEEL = CHANGE WEAPON: outside a menu and a scope a notch (up or down) presses Change weapon (B) for 80 ms.
+         * The notch is used up, so a "wheel" key binding does not also fire. (In a scope the wheel was taken above: zoom.) */
+        static DWORD wa_until;
+        if (!in_menu && wheel) {
+            wa_until = GetTickCount() + 80;
+            wheel = 0;
+        }
+        if ((LONG)(wa_until - GetTickCount()) > 0)
+            analog[XBOX_BUTTON_B] = 255;
     }
 
     /* ---- mouse: aim ---- */
@@ -2201,6 +2714,94 @@ int mkb_merge(DWORD dwPort, XBOX_INPUT_STATE *pState)
                 on = (btn >> (code - MKB_MOUSE1)) & 1;
             else
                 on = (LONG)(y_until - GetTickCount()) > 0;
+        }
+        if (i == MKC_UP) {
+            /* GRENADE MACRO: the grenade control (keys 4 / Up, or the pad's D-pad up) down = take the grenade out (one 90 ms D-pad up
+             * press), wait until it is in the hands, pull the pin (Action), hold fire; control up = the throw. Then Change weapon is
+             * pressed (every 0.5 s, 4 times at most) until the weapon held before is back. Released before the grenade is ready: the
+             * pin is still pulled and thrown (the fire hold lasts at least 120 ms). */
+            static int gm_state;                /* 0 idle, 1 waiting for the grenade, 2 pin + fire, 3 throwing, 4 weapon back */
+            static DWORD gm_start, gm_up_until, gm_ready, gm_end, gm_b_until, gm_next_b;
+            static int gm_prev, gm_tries;
+            static unsigned gm_want;            /* the weapon object to bring back */
+            DWORD now = GetTickCount();
+            if (!mkb_gren_macro_get() || in_menu) {
+                gm_state = 0;
+                gm_prev = 0;
+            } else {
+                int pad_up = (pState->Gamepad.wButtons & XBOX_GAMEPAD_DPAD_UP) != 0;
+                if (pad_up)
+                    pState->Gamepad.wButtons &= (WORD)~XBOX_GAMEPAD_DPAD_UP;     /* the pad's D-pad up is the macro's too, not sent as it is */
+                on = on || pad_up;
+                if (on && !gm_prev) {
+                    if (g_mkb_gren_held == 0 && g_mkb_held_weapon)
+                        gm_want = g_mkb_held_weapon;        /* a gun is in the hands: that one comes back after the throw */
+                    gm_start = now;
+                    gm_state = 1;
+                    if (g_mkb_gren_held != 1)
+                        gm_up_until = now + 90;             /* with a grenade already in the hands there is nothing to take out */
+                    fprintf(stderr, "[GRENMACRO] down: grenade in hand=%d weapon=%08X back-to=%08X\n",
+                            (int)g_mkb_gren_held, g_mkb_held_weapon, gm_want);
+                }
+                if (gm_state == 1) {
+                    if (g_mkb_gren_held == 1 || (g_mkb_gren_held < 0 && now - gm_start > 700u)) {
+                        gm_state = 2;
+                        gm_ready = now;
+                        fprintf(stderr, "[GRENMACRO] grenade ready after %lu ms\n", (unsigned long)(now - gm_start));
+                    } else if (now - gm_start > 1500u) {
+                        gm_state = 0;
+                        fprintf(stderr, "[GRENMACRO] gave up: no grenade came into the hands\n");
+                    }
+                }
+                if (gm_state == 2) {
+                    /* The game's take-out animation goes on for a while after the held weapon object has changed: an Action press
+                     * at 200 ms was ignored (the grenade came out with the pin in, 2026-11-19 test). RECOMP_GRENADE_PIN_MS (default
+                     * 600) is how long after "ready" Action is pressed; the fire hold starts 300 ms after that (the pin-pull
+                     * animation), and lasts at least 120 ms. */
+                    static DWORD pin_ms;
+                    DWORD t = now - gm_ready;
+                    if (!pin_ms) {
+                        const char *e = getenv("RECOMP_GRENADE_PIN_MS");
+                        int v = e ? atoi(e) : 0;
+                        pin_ms = v >= 100 && v <= 3000 ? (DWORD)v : 600u;
+                    }
+                    if (t >= pin_ms && t < pin_ms + 90u)
+                        analog[XBOX_BUTTON_A] = 255;                    /* Action: pull the pin */
+                    if (t >= pin_ms + 300u && (on || t < pin_ms + 420u))
+                        analog[XBOX_BUTTON_RTRIGGER] = 255;             /* hold the throw button */
+                    if (t >= pin_ms + 420u && !on) {
+                        gm_state = 3;
+                        gm_end = now;
+                        fprintf(stderr, "[GRENMACRO] released: throw\n");
+                    }
+                }
+                if (gm_state == 3 && now - gm_end > 900u) {          /* the throw animation */
+                    gm_state = 4;
+                    gm_tries = 0;
+                    gm_next_b = now;
+                }
+                if (gm_state == 4) {
+                    int done = gm_want ? g_mkb_held_weapon == gm_want : g_mkb_gren_held == 0;
+                    if (done) {
+                        gm_state = 0;
+                        fprintf(stderr, "[GRENMACRO] weapon back (%d presses)\n", gm_tries);
+                    } else if ((LONG)(now - gm_next_b) >= 0) {
+                        if (gm_tries >= 4) {
+                            gm_state = 0;
+                            fprintf(stderr, "[GRENMACRO] could not bring the weapon back (held %08X, want %08X)\n",
+                                    g_mkb_held_weapon, gm_want);
+                        } else {
+                            gm_tries++;
+                            gm_b_until = now + 80;
+                            gm_next_b = now + 500;
+                        }
+                    }
+                }
+                if ((LONG)(gm_b_until - now) > 0)
+                    analog[XBOX_BUTTON_B] = 255;                        /* Change weapon */
+                gm_prev = on;
+                on = (LONG)(gm_up_until - now) > 0;                     /* the control itself is only the take-out pulse */
+            }
         }
         if (!on)
             continue;
@@ -2266,6 +2867,7 @@ int mkb_merge(DWORD dwPort, XBOX_INPUT_STATE *pState)
         if (raw && !prev_raw)
             g_mkb_rt_presses++;
         prev_raw = raw;
+        g_mkb_fire_held = raw;                  /* the trigger as the player holds it, before the gate below releases it between bullets */
         if (raw && g_mkb_gate_until_ms > 0.0) {
             LARGE_INTEGER q, f;
             QueryPerformanceCounter(&q);
@@ -2277,11 +2879,27 @@ int mkb_merge(DWORD dwPort, XBOX_INPUT_STATE *pState)
         }
     }
 
+    if (g_mkb_inject_weapon_until_ms > 0.0) {    /* AUTO-SWITCH: the game side asks for a Change weapon press */
+        LARGE_INTEGER q, f;
+        QueryPerformanceCounter(&q);
+        QueryPerformanceFrequency(&f);
+        if (1000.0 * (double)q.QuadPart / (double)f.QuadPart < g_mkb_inject_weapon_until_ms) {
+            static int logged;
+            pState->Gamepad.bAnalogButtons[XBOX_BUTTON_B] = 255;      /* B is an analog button on the console pad (its mask is 0) */
+            any = 1;
+            if (!logged) {
+                logged = 1;
+                fprintf(stderr, "[AUTOSWITCH] B applied to the pad state\n");
+            }
+        }
+    }
+
     {
         unsigned lb = pState->Gamepad.wButtons;
         for (i = 0; i < 6; i++)
             if (pState->Gamepad.bAnalogButtons[i] > 100) lb |= 1u << (16 + i);
         g_mkb_last_btn = lb;
+        g_mkb_aim_held = pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] > 100;
     }
 
     /* Edge detection: a title polling for changes ignores a state whose
@@ -2710,7 +3328,7 @@ static volatile LONG s_ic_kb_tick, s_ic_pad_tick;   /* GetTickCount of the last 
 int  mkb_get_icon_mode(void)         { return s_icon_mode; }
 void mkb_set_icon_mode(int m)        { s_icon_mode = m < 0 || m > 2 ? 0 : m; }
 int  mkb_get_icon_style(void)        { return s_icon_style; }
-void mkb_set_icon_style(int s)       { s_icon_style = s ? 1 : 0; }
+void mkb_set_icon_style(int s)       { s_icon_style = s < 0 ? 0 : s > 4 ? 4 : s; }
 
 /* The keyboard or the mouse did something (raw-input thread); only while the game is in front. */
 static void ic_note_kb(void)

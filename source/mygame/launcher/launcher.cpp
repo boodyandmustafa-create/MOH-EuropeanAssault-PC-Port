@@ -49,8 +49,8 @@ static const wchar_t *LAUNCHER_VERSION = L"0.9.2-beta";
 static const char *USA_XBE_SHA256 = "5a34d7f3a38293178c34865dc60819b0796f17e1c7091722079cf075d33335e8";
 
 static const int W = 1180, H = 700, SB = 210;
-enum { T_PLAY, T_GAME, T_CONTROLS, T_MODS, T_EXTRAS, T_RECOMP, T_SAVES, T_CREDITS, T_COUNT };
-static const wchar_t *TABKEY[T_COUNT] = { L"play", L"game", L"controls", L"mods", L"extras", L"recomp", L"saves", L"credits" };
+enum { T_PLAY, T_GAME, T_CONTROLS, T_MODS, T_EXTRAS, T_HUD, T_CHEATS, T_RECOMP, T_SAVES, T_CREDITS, T_COUNT };
+static const wchar_t *TABKEY[T_COUNT] = { L"play", L"game", L"controls", L"mods", L"extras", L"hud", L"cheats", L"recomp", L"saves", L"credits" };
 
 static ws   g_dir;                 /* folder of Launcher.exe, with a trailing backslash */
 static bool g_rtl = false;
@@ -672,7 +672,7 @@ static void CheckGame()
     g_hasExe = Exists(g_dir + L"MOHEuropeanAssault.exe");
     g_ver = 0;
     if (g_hasXbe) g_ver = Sha256File(g_dir + L"game\\DEFAULT.XBE") == USA_XBE_SHA256 ? 1 : 2;
-    g_ready = g_hasXbe && g_hasData && g_hasEagl && g_hasExe && g_ver == 1 && g_missingDlls.empty();
+    g_ready = g_hasXbe && g_hasData && g_hasEagl && g_hasExe && g_missingDlls.empty();   /* the USA and the European XBE both work: the hash only names the version */
 }
 
 /* ---------------------------------------------------------------- drawing basics */
@@ -881,6 +881,26 @@ static void BuildBackdrop(int tab)
             Pen crack(Color(60, 0, 0, 0), 1.2f);
             for (int k = 0; k < 6; k++) { float a = k * 1.05f; g.DrawLine(&crack, x + 4, y + 4, x + 4 + 24 * cosf(a), y + 4 + 24 * sinf(a)); }
         }
+        break;
+    }
+    case T_HUD: {                                   /* viewfinder corners and a crosshair */
+        Pen fr(Color(46, 200, 181, 96), 3);
+        const float x0 = SB + 50.f, y0 = 50.f, x1 = W - 50.f, y1 = H - 50.f, L = 56.f;
+        g.DrawLine(&fr, x0, y0, x0 + L, y0); g.DrawLine(&fr, x0, y0, x0, y0 + L);
+        g.DrawLine(&fr, x1, y0, x1 - L, y0); g.DrawLine(&fr, x1, y0, x1, y0 + L);
+        g.DrawLine(&fr, x0, y1, x0 + L, y1); g.DrawLine(&fr, x0, y1, x0, y1 - L);
+        g.DrawLine(&fr, x1, y1, x1 - L, y1); g.DrawLine(&fr, x1, y1, x1, y1 - L);
+        Pen ch(Color(30, 200, 181, 96), 2);
+        float cx = 930, cy = 400;
+        g.DrawEllipse(&ch, cx - 110, cy - 110, 220.f, 220.f);
+        g.DrawLine(&ch, cx - 150, cy, cx - 40, cy); g.DrawLine(&ch, cx + 40, cy, cx + 150, cy);
+        g.DrawLine(&ch, cx, cy - 150, cx, cy - 40); g.DrawLine(&ch, cx, cy + 40, cx, cy + 150);
+        break;
+    }
+    case T_CHEATS: {                                /* a stamped dossier */
+        Pen ln(Color(18, 0, 0, 0), 1);
+        for (int y = 120; y < H - 60; y += 28) g.DrawLine(&ln, SB + 60, y, W - 60, y);
+        Stamp(g, L"TOP SECRET", 930, 540, -10, Color(78, 190, 40, 32), 58);
         break;
     }
     case T_RECOMP: {                                /* blueprint */
@@ -1117,17 +1137,17 @@ static void PaintSidebar(Graphics &g)
     Txt(g, T(L"app.sub"), Fnt(11, false, true), KHD, RectF(logo.X, 105, SB, 16), 1);
 
     for (int i = 0; i < T_COUNT; i++) {
-        RectF r = M(10, 150.f + i * 50, SB - 20, 44);
+        RectF r = M(10, 150.f + i * 45, SB - 20, 40);
         bool sel = i == g_tab, hv = Hover(r);
         if (sel) {
             FillRR(g, Color(70, 200, 181, 96), r, 4);
             SolidBrush bar(KH);
             g.FillRectangle(&bar, g_rtl ? r.X + r.Width - 4 : r.X, r.Y + 6, 4.f, r.Height - 12);
         } else if (hv) FillRR(g, Color(34, 200, 181, 96), r, 4);
-        wchar_t num[8]; swprintf(num, 8, L"0%d", i + 1);
-        RectF nr = M(22, 150.f + i * 50, 34, 44);
+        wchar_t num[8]; swprintf(num, 8, L"%02d", i + 1);
+        RectF nr = M(22, 150.f + i * 45, 34, 40);
         Txt(g, num, Fnt(12, false, false), sel ? KH : KHD, nr, 0);
-        RectF tr = M(58, 150.f + i * 50, SB - 78, 44);
+        RectF tr = M(58, 150.f + i * 45, SB - 78, 40);
         Txt(g, T(ws(L"tab.") + TABKEY[i]), Fnt(17, true, true), sel ? TXT : DIM, tr, 0);
         AddHit(r, K_TAB, i);
     }
@@ -1210,7 +1230,7 @@ static void PaintPlay(Graphics &g)
     StatusLine(g, px + 8, y, pw - 16, T(L"play.f.data"), g_hasData, T(g_hasData ? L"play.ok" : L"play.missing")); y += 30;
     StatusLine(g, px + 8, y, pw - 16, T(L"play.f.eagl"), g_hasEagl, T(g_hasEagl ? L"play.ok" : L"play.missing")); y += 30;
     ws vs = g_ver == 1 ? T(L"play.ver.usa") : g_ver == 2 ? T(L"play.ver.bad") : T(L"play.ver.unk");
-    StatusLine(g, px + 8, y, pw - 16, T(L"play.f.ver"), g_ver == 1, g_ver == 1 ? ws(L"USA / NTSC-U") : vs, g_ver == 1 ? 130.f : 260.f);
+    StatusLine(g, px + 8, y, pw - 16, T(L"play.f.ver"), g_ver != 0, g_ver == 1 ? ws(L"USA / NTSC-U") : vs, g_ver == 1 ? 130.f : 260.f);
     if (g_ver == 1) {
         /* the longer wording only when it does not fit on the line */
     }
@@ -1400,7 +1420,7 @@ static void DoBackup()
 }
 
 static ws ReportUrl();
-static bool CopyInfo(bool withLog)
+static ws BuildInfo(bool withLog)
 {
     ws s = L"MoH European Assault PC port " + PackageVersion() + L"\r\n";
     OSVERSIONINFOEXW vi = { sizeof vi };
@@ -1430,6 +1450,11 @@ static bool CopyInfo(bool withLog)
         s += L"\r\n--- play_log.txt (last 80 lines) ---\r\n";
         for (size_t i = lines.size() > 80 ? lines.size() - 80 : 0; i < lines.size(); i++) s += U8(lines[i]) + L"\r\n";
     }
+    return s;
+}
+static bool CopyInfo(bool withLog)
+{
+    ws s = BuildInfo(withLog);
     if (OpenClipboard(g_hwnd)) {
         EmptyClipboard();
         HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (s.size() + 1) * 2);
@@ -1445,12 +1470,105 @@ static bool CopyInfo(bool withLog)
     return false;
 }
 
-/* "Report a problem": the system info (no log: an issue body is limited to about 65,000 characters) goes to the
- * clipboard, Explorer opens with play_log.txt selected to drag into the issue, and the new-issue page opens. */
+/* Public issue pages: the Windows user name must not travel in the files. "\Users\<name>" becomes "\Users\USER". */
+static std::string RedactUser(std::string s)
+{
+    std::string name = To8(EnvW(L"USERNAME"));
+    if (name.empty()) return s;
+    for (const char *sep : { "\\", "/" }) {
+        std::string pat = std::string(sep) + "Users" + sep + name, rep = std::string(sep) + "Users" + sep + "USER";
+        std::string low = s, lp = pat;
+        std::transform(low.begin(), low.end(), low.begin(), [](unsigned char c) { return (char)tolower(c); });
+        std::transform(lp.begin(), lp.end(), lp.begin(), [](unsigned char c) { return (char)tolower(c); });
+        std::string out;
+        size_t i = 0, j;
+        while ((j = low.find(lp, i)) != std::string::npos) { out.append(s, i, j - i); out += rep; i = j + pat.size(); }
+        out.append(s, i, std::string::npos);
+        s = out;
+    }
+    return s;
+}
+
+/* One text file into the staging folder: user name removed, a very long log cut to its start and its last 3.5 MB. */
+static void StageText(const ws &stage, const wchar_t *name, bool redact)
+{
+    std::string d;
+    if (!ReadAll(g_dir + name, d)) return;
+    if (d.size() > 4u * 1024 * 1024) d = d.substr(0, 300 * 1024) + "\r\n...[cut]...\r\n" + d.substr(d.size() - 3584 * 1024);
+    WriteAll(stage + name, redact ? RedactUser(d) : d);
+}
+
+/* MoH_report.zip: the logs (play_log, play_log_prev, play_log_crash), crash.txt, a recent crash.dmp, the ini, the system info and the
+ * names of what is in mods\. Built with Windows' own tar.exe. Returns false when no zip came out. */
+static bool BuildReportZip(const ws &zip)
+{
+    ws stage = g_dir + L"report_tmp\\";
+    CreateDirectoryW(stage.c_str(), NULL);
+    for (const wchar_t *n : { L"play_log.txt", L"play_log_prev.txt", L"play_log_crash.txt", L"crash.txt" }) StageText(stage, n, true);
+    {   /* crash.dmp only when it is from this week: an old one would point at the wrong crash */
+        WIN32_FILE_ATTRIBUTE_DATA fa;
+        if (GetFileAttributesExW((g_dir + L"crash.dmp").c_str(), GetFileExInfoStandard, &fa)) {
+            FILETIME now; GetSystemTimeAsFileTime(&now);
+            ULARGE_INTEGER a, b;
+            a.LowPart = now.dwLowDateTime; a.HighPart = now.dwHighDateTime;
+            b.LowPart = fa.ftLastWriteTime.dwLowDateTime; b.HighPart = fa.ftLastWriteTime.dwHighDateTime;
+            if (a.QuadPart - b.QuadPart < 7ull * 864000000000ull) CopyFileW((g_dir + L"crash.dmp").c_str(), (stage + L"crash.dmp").c_str(), FALSE);
+        }
+    }
+    {
+        ws ini;
+        for (auto &l : g_ini) if (l.compare(0, 3, "kb_") && l.compare(0, 4, "pad_")) ini += U8(l) + L"\r\n";
+        WriteAll(stage + L"recomp_settings.ini", To8(ini));
+        WriteAll(stage + L"info.txt", To8(BuildInfo(false)));
+    }
+    {   /* names only (two levels): texture packs are huge and are not wanted */
+        std::string list;
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW((g_dir + L"mods\\*").c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (fd.cFileName[0] == L'.') continue;
+                list += To8(fd.cFileName) + ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? "\\\r\n" : "\r\n");
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                    WIN32_FIND_DATAW f2;
+                    int n = 0;
+                    HANDLE h2 = FindFirstFileW((g_dir + L"mods\\" + fd.cFileName + L"\\*").c_str(), &f2);
+                    if (h2 != INVALID_HANDLE_VALUE) {
+                        do { if (f2.cFileName[0] != L'.' && n++ < 40) list += "    " + To8(f2.cFileName) + "\r\n"; } while (FindNextFileW(h2, &f2));
+                        FindClose(h2);
+                        if (n > 40) list += "    ... (" + std::to_string(n) + " entries)\r\n";
+                    }
+                }
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+        WriteAll(stage + L"mods_list.txt", list);
+    }
+    DeleteFileW(zip.c_str());
+    ws cmd = L"tar.exe -a -c -f \"" + zip + L"\" -C \"" + stage.substr(0, stage.size() - 1) + L"\" .";
+    STARTUPINFOW si = { sizeof si };
+    PROCESS_INFORMATION pi = {};
+    bool ran = CreateProcessW(NULL, &cmd[0], NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi) != 0;
+    if (ran) { WaitForSingleObject(pi.hProcess, 60000); CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((stage + L"*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do { if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) DeleteFileW((stage + fd.cFileName).c_str()); } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    RemoveDirectoryW(stage.c_str());
+    return Exists(zip);
+}
+
+/* "Report a problem": the short system info goes to the clipboard (an issue body is limited to about 65,000 characters),
+ * the logs and crash files are zipped into MoH_report.zip, Explorer opens with the zip selected to drag into the issue,
+ * and the new-issue page opens. If the zip cannot be made, play_log.txt is selected instead, as before. */
 static void ReportProblem()
 {
     bool ok = CopyInfo(false);
-    ws log = g_dir + L"play_log.txt";
+    ws zip = g_dir + L"MoH_report.zip";
+    bool zipped = BuildReportZip(zip);
+    ws log = zipped ? zip : g_dir + L"play_log.txt";
     if (Exists(log)) {
         ws arg = L"/select,\"" + log + L"\"";
         ShellExecuteW(NULL, L"open", L"explorer.exe", arg.c_str(), NULL, SW_SHOWNORMAL);
@@ -1458,7 +1576,7 @@ static void ReportProblem()
     ws url = ReportUrl();
     if (url.size() >= 7 && url.compare(url.size() - 7, 7, L"/issues") == 0) url += L"/new";
     ShellExecuteW(NULL, L"open", url.c_str(), NULL, NULL, SW_SHOWNORMAL);
-    if (ok) Toast(T(L"report.copied"));
+    if (ok) Toast(T(zipped ? L"report.zip" : L"report.copied"));
 }
 
 static void DoAction(const ws &k)

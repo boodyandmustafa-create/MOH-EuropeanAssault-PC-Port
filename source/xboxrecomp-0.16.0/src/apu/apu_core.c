@@ -535,7 +535,9 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
     }
 
     /* Try XAudio2 first (lower latency) */
-    if (xa2_init()) {
+    /* RECOMP_AUDIO_BACKEND=waveout skips XAudio2 (an A/B for a one-sided level problem). */
+    const char *be = getenv("RECOMP_AUDIO_BACKEND");
+    if (!(be && !strcmp(be, "waveout")) && xa2_init()) {
         /* Pacing marks in samples (xa2_pacing_marks): high is all the
          * device buffers, capped so a period submitted below it never
          * fills a buffer the voice has no slot for; low is half of it. */
@@ -920,6 +922,27 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
             }
         }
         mixer_render(extra, MIXER_FRAME_SAMPLES);
+        /* RECOMP_AUDIO_TONETEST=1: a 440 Hz tone at -14 dBFS cycles every 8 s: 2 s left only, 2 s right only, 2 s both,
+         * 2 s silent. Checks that the two output channels reach the ear with the same level (left-only vs right-only). */
+        {
+            static int tt = -1;
+            static unsigned long long n;
+            static double ph;
+            if (tt < 0) {
+                const char *e = getenv("RECOMP_AUDIO_TONETEST");
+                tt = e && *e == '1';
+            }
+            if (tt) {
+                for (int i = 0; i < MIXER_FRAME_SAMPLES; i++, n++) {
+                    unsigned sec = (unsigned)((n / 48000ull) % 8ull) / 2u;   /* 0 left, 1 right, 2 both, 3 silent */
+                    int16_t s = (int16_t)(sin(ph) * 6500.0);
+                    ph += 2.0 * M_PI * 440.0 / 48000.0;
+                    if (ph >= 2.0 * M_PI) ph -= 2.0 * M_PI;
+                    if (sec == 0 || sec == 2) extra[i][0] = (int16_t)(extra[i][0] + s);
+                    if (sec == 1 || sec == 2) extra[i][1] = (int16_t)(extra[i][1] + s);
+                }
+            }
+        }
         mix_into(period, (const int16_t (*)[2])extra, MIXER_FRAME_SAMPLES);
     }
 

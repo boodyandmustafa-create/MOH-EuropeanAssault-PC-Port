@@ -4,7 +4,19 @@ RECOMP SETTINGS|إعدادات النسخة
 CONTROLS|التحكم
 KEYBOARD AND MOUSE|لوحة المفاتيح والفأرة
 GAMEPAD|ذراع التحكم
-Up / Down  select      Left / Right  change      B / Esc  back|أعلى / أسفل  اختيار      يسار / يمين  تغيير      B / Esc  رجوع
+Up / Down / wheel  select      Left / Right  change      B / Esc  back|أعلى / أسفل / العجلة  اختيار      يسار / يمين  تغيير      B / Esc  رجوع
+Up / Down / wheel  select      Enter / click  open      B / Esc  close|أعلى / أسفل / العجلة  اختيار      Enter / نقر  فتح      B / Esc  إغلاق
+drag this bar to move, drag the edges to resize|اسحب هذا الشريط للتحريك، واسحب الحواف لتغيير الحجم
+[ Restart game ]|[ إعادة تشغيل اللعبة ]
+[ Click again to restart ]|[ انقر مرة أخرى للتأكيد ]
+Video|الصورة
+Gameplay|اللعب
+HUD|واجهة اللعب HUD
+Effects|المؤثرات
+Audio|الصوت
+Mods and tools|التعديلات والأدوات
+Cheats|الغش
+General|عام
 [ Back ]|[ رجوع ]
 ^ more above|^ المزيد في الأعلى
 v more below|v المزيد في الأسفل
@@ -27,6 +39,8 @@ Fog distance|مسافة الضباب
 Anisotropic filtering|الترشيح متباين الخواص
 FXAA anti-aliasing|تنعيم الحواف FXAA
 Super Accuracy|الدقة الفائقة
+Explosion size|حجم الانفجارات
+live; grenades, rockets, tank shells, barrels get a bigger fireball, smoke and debris. The blast damage is not changed|فوري؛ القنابل والصواريخ وقذائف الدبابات والبراميل تعطي كرة نار ودخاناً وحطاماً أكبر. ضرر الانفجار لا يتغير
 Blood amount|كمية الدم
 Blood colour|لون الدم
 Original|الأصلي
@@ -42,9 +56,15 @@ seconds the spray stays; Auto = by amount|ثوانٍ يبقى فيها الرذ�
 Auto|تلقائي
 Keep corpses (experimental)|إبقاء الجثث (تجريبي)
 bodies that stay on the ground|الجثث التي تبقى على الأرض
+Corpse fix (60 Hz physics)|إصلاح تطاير الجثث (فيزياء 60 هرتز)
+live; On stops dead bodies flying into the air at high frame rates, but it can freeze or crash the game. Off: bodies may fly, no freeze|فوري؛ التشغيل يمنع تطاير الجثث في الهواء عند الإطارات العالية لكنه قد يجمّد اللعبة أو يسبب كراش. الإيقاف: قد تتطاير الجثث بلا تجمد
 FPS counter|عداد الإطارات
 Screen blood|دم على الشاشة
 splatters on your view when an enemy is hit close|بقع دم على شاشتك عند إصابة عدو قريب
+Blood stains|بقع الدم على الجدران والأرض
+live; blood on walls and floor when a soldier is hit, when one dies and when you are hurt. Low = deaths only|فوري؛ بقع دم على الجدران والأرض عند إصابة جندي أو موته أو إصابتك. منخفض = عند الموت فقط
+Stain limit|حد البقع
+how many blood stains and bullet holes stay on the walls and floor before the oldest start to vanish (the game itself keeps 100). More = longer-lasting blood but a little less speed when it fills up. Applies at the next level load|كم بقعة دم وثقب رصاص تبقى على الجدران والأرض قبل أن تبدأ الأقدم بالاختفاء (اللعبة نفسها تحتفظ بـ 100). الأكثر = دم يبقى أطول لكن سرعة أقل قليلاً عند الامتلاء. يُطبَّق عند تحميل المستوى التالي
 Screen dirt|غبار وأتربة على الشاشة
 dust and dirt on your view when an explosion is near|غبار وأتربة على شاشتك عند انفجار قريب
 Screen rain|قطرات المطر على الشاشة
@@ -95,6 +115,8 @@ Rest to recover|الراحة للتعافي
 Language|لغة اللعبة
 Frame rate|معدل الإطارات
 Resolution|الدقة
+Aspect ratio|نسبة الشاشة
+restart; 4:3 and 16:9 are the game's own shapes. 21:9 widens the view (the HUD stays in 16:9 shape at the screen edges, menus stay 16:9). Auto follows your window or monitor. With a 16:9 resolution the width is made to fit|إعادة تشغيل؛ 4:3 و16:9 هما شكلا اللعبة الأصليان. 21:9 يوسّع الرؤية (يبقى الـHUD بشكل 16:9 عند أطراف الشاشة، وتبقى القوائم 16:9). تلقائي يتبع نافذتك أو شاشتك. مع دقة 16:9 يُضبط العرض ليناسب النسبة
 Split-screen pads|أذرع الشاشة المنقسمة
 restart; keyboard and mouse = player 1, each gamepad = the next player|إعادة تشغيل؛ لوحة المفاتيح والفأرة = اللاعب 1، وكل ذراع = اللاعب التالي
 Fullscreen|ملء الشاشة
@@ -177,14 +199,88 @@ Down arrow|السهم الأسفل
 Left arrow|السهم الأيسر
 Right arrow|السهم الأيمن
 Enemy count (heavy)|عدد الأعداء (ثقيل)
-experimental; applies at the next mission load; x2 to x5 times the enemies that spawn points create (max x5). Heavy: costs frames, keep it low on a slower PC|تجريبي؛ يسري عند تحميل المهمة التالية؛ من x2 إلى x5 أضعاف الأعداء الذين تنتجهم نقاط الظهور (الحد x5). ثقيل: يكلّف إطارات، فاجعله منخفضاً على الجهاز الأضعف
-Enemy count applies to|يسري على
-which difficulties get the extra enemies|أي مستويات الصعوبة تحصل على الأعداء الإضافيين
-All difficulties|كل مستويات الصعوبة
-Elite and Hero only|النخبة والبطل فقط
-set Enemy count first|حدّد عدد الأعداء أولاً
-Enemy count: Recruit|عدد الأعداء: مبتدئ
-Enemy count: Veteran|عدد الأعداء: محترف
-Enemy count: Elite|عدد الأعداء: نخبة
-Enemy count: Hero|عدد الأعداء: بطل
-extra enemies on this difficulty|أعداء إضافيون على هذا المستوى
+applies at the next mission load; x2 to x5 times the enemies that spawn points create (max x5), on every difficulty. Heavy: costs frames, keep it low on a slower PC|يسري عند تحميل المهمة التالية؛ من x2 إلى x5 أضعاف الأعداء الذين تنتجهم نقاط الظهور (الحد x5)، على كل مستويات الصعوبة. ثقيل: يكلّف إطارات، فاجعله منخفضاً على الجهاز الأضعف
+Enemy grenades|قنابل الأعداء
+live; enemies that are shooting at you throw a grenade from time to time: Low about every 20 s, Medium 12 s, High 7 s, at most one in the air. No throw animation, the grenade appears at the soldier's hand|فوري؛ الأعداء الذين يطلقون النار عليك يرمون قنبلة بين فترة وأخرى: منخفض كل 20 ثانية تقريباً، متوسط 12 ثانية، عالٍ 7 ثوانٍ، وقنبلة واحدة فقط في الهواء. لا توجد حركة رمي، تظهر القنبلة عند يد الجندي
+Medium|متوسط
+Damage mode|نمط الضرر
+Low damage|ضرر منخفض
+Normal: the game's own damage, and a Damage line in mods\weapons works. Low damage: 7 hits (head 3); heavy guns 1 head / 2 body; the mods\weapons Damage line is IGNORED. Live|عادي: ضرر اللعبة الأصلي، وسطر Damage في mods\weapons يعمل. ضرر منخفض: 7 إصابات (الرأس 3)؛ الثقيلة طلقة في الرأس أو طلقتان في الجسم؛ سطر Damage في mods\weapons يُتجاهَل. فوري
+Hit marker|علامة الإصابة
+live; a white X at the centre when you hit an enemy, a red X when you kill him|فوري؛ علامة X بيضاء في وسط الشاشة عند إصابة العدو، وحمراء عند قتله
+Auto switch weapon|تبديل السلاح تلقائياً
+live; Empty magazine = the other weapon comes up when the magazine runs empty, instead of the reload. Out of ammo = only when the weapon has no rounds left at all (magazine and reserve)|فوري؛ مخزن فارغ = يظهر السلاح الآخر عندما يفرغ المخزن بدل إعادة التعبئة. نفدت الذخيرة = فقط عندما لا يبقى في السلاح أي رصاص (المخزن والاحتياطي)
+Empty magazine|مخزن فارغ
+Out of ammo|نفدت الذخيرة
+Pain sounds|أصوات الألم
+live; a pain sound when a soldier or you are hit, a scream when a soldier dies. Needs your WAV files in the mods folder, sounds, pain (see README there)|فوري؛ صوت ألم عند إصابة جندي أو إصابتك، وصراخ عند موت الجندي. تحتاج ملفات WAV خاصة بك في مجلد mods ثم sounds ثم pain (راجع README هناك)
+Pain volume|مستوى أصوات الألم
+live; how loud the pain sounds are|فوري؛ مدى علو أصوات الألم
+turn Pain sounds on first|فعّل أصوات الألم أولاً
+Breathing sound|صوت التنفس
+live; the player breathes after a moment of sprinting and while worn out. Uses the WAV files in the mods folder, sounds, breath|فوري؛ يتنفس اللاعب بعد لحظة من الجري وعند التعب. يستخدم ملفات WAV الموجودة في مجلد mods ثم sounds ثم breath
+Breathing volume|مستوى صوت التنفس
+live; how loud the breathing is|فوري؛ مدى علو صوت التنفس
+turn Breathing sound on first|فعّل صوت التنفس أولاً
+Scope sway|اهتزاز المنظار
+live; in a scope the aim moves in a slow wave while your health is low (red)|فوري؛ داخل المنظار تتحرك الكاميرا بموجة بطيئة عندما تكون صحتك قليلة (حمراء)
+Scope sway strength|قوة الاهتزاز
+live; 1 = faint, 5 = strong|فوري؛ 1 = خفيف، 5 = قوي
+turn Scope sway on first|فعّل اهتزاز المنظار أولاً
+Weapon lighting|إضاءة السلاح
+live; the weapon you hold reflects the light around you (a street lamp's colour, the sky), shows dust after explosions, blood after close hits and drops in the rain|فوري؛ السلاح بيدك يعكس الضوء حولك (لون مصباح الشارع، السماء)، ويظهر عليه الغبار بعد الانفجارات والدم بعد الإصابات القريبة وقطرات المطر
+Gun sway|وزن السلاح
+live; the weapon has weight: it lags behind when you turn the camera and catches up with a small swing|فوري؛ للسلاح وزن: يتأخر عن الكاميرا عند التدوير ثم يلحق بها بحركة خفيفة
+Gun sway strength|قوة وزن السلاح
+live; 1 = light and quick, 5 = heavy and slow|فوري؛ 1 = خفيف وسريع، 5 = ثقيل وبطيء
+turn Gun sway on first|فعّل وزن السلاح أولاً
+Freecam|الكاميرا الحرة
+live, in a mission; the camera flies free of your soldier (also the Insert key). WASD fly along the view, mouse turns, Space up, C down, Shift fast, Ctrl slow. Pad: left stick fly, right stick turn, triggers up / down. The weapon is hidden|فوري، داخل المهمة؛ الكاميرا تطير حرة بعيداً عن جنديك (ومفتاح Insert أيضاً). WASD للطيران باتجاه النظر، الماوس للتدوير، Space للأعلى، C للأسفل، Shift سريع، Ctrl بطيء. اليد: العصا اليسرى للطيران، اليمنى للتدوير، الزنادان للأعلى والأسفل. السلاح يختفي
+Freecam world|عالم الكاميرا الحرة
+live; Frozen = enemies, physics and scripts stand still while you fly. Running = the game goes on around you|فوري؛ مجمّد = الأعداء والفيزياء والسكربتات تقف أثناء الطيران. يعمل = اللعبة تستمر حولك
+Frozen|مجمّد
+Running|يعمل
+Freecam speed|سرعة الكاميرا الحرة
+Map editor|محرر الخرائط
+live, with the free camera on: Numpad 2 puts an enemy soldier 6 steps in front of the camera, Numpad 3 a friendly one, Numpad 7 takes the last one back, Numpad 4 kills the soldier in the crosshair, Numpad 6 clears the saved list. Placements are saved per mission in mods\maps and come back by themselves when the mission starts|فوري، والكاميرا الحرة شغّالة: Numpad 2 يضع جندياً عدواً أمام الكاميرا بست خطوات، Numpad 3 جندياً صديقاً، Numpad 7 يرجّع آخر واحد، Numpad 4 يقتل الجندي الذي في المنتصف، Numpad 6 يمسح القائمة المحفوظة. كل ما تضعه يُحفظ لكل مهمة في mods\maps ويعود وحده عند بدء المهمة
+live; 1 = slow, 5 = very fast (Shift makes it 4x faster)|فوري؛ 1 = بطيء، 5 = سريع جداً (Shift يجعلها أسرع 4 مرات)
+Cheats: Unlock all missions|الغش: فتح كل المراحل
+live; every mission can be picked in Mission Select (your save is not changed). Open Mission Select again after turning it on|فوري؛ يمكن اختيار أي مرحلة من شاشة اختيار المهمة (حفظك لا يتغير). افتح اختيار المهمة من جديد بعد التشغيل
+Cheats: Unlimited ammo|الغش: ذخيرة لا نهائية
+live; the game's own cheat: your weapons never run out of ammo (single player)|فوري؛ غش اللعبة الأصلي: أسلحتك لا تنفد ذخيرتها (للعب الفردي)
+Cheats: Invincible|الغش: لا تُقتل
+live; the game's own cheat: you cannot be killed (single player)|فوري؛ غش اللعبة الأصلي: لا يمكن قتلك (للعب الفردي)
+Cheats: Full adrenaline meter|الغش: ملء مقياس الأدرينالين
+in a mission, single player: press to fill the adrenaline meter at once (the game's own cheat; its message says Rally Bar Filled)|داخل المهمة، للعب الفردي: اضغط لملء مقياس الأدرينالين فوراً (غش اللعبة الأصلي؛ رسالته في اللعبة «Rally Bar Filled»)
+Cheats: Kill nemesis|الغش: قتل العدو الرئيسي
+in a mission, single player: press to kill the nemesis (the boss you have to hunt down) at once (the game's own cheat)|داخل المهمة، للعب الفردي: اضغط لقتل العدو الرئيسي (الذي يجب أن تطارده) فوراً (غش اللعبة الأصلي)
+Cheats: Disable shellshock|الغش: إلغاء صدمة الانفجار
+live; the game's own cheat: no shellshock (the deafness and blur after a nearby explosion)|فوري؛ غش اللعبة الأصلي: بلا صدمة انفجار (الصمم والضبابية بعد انفجار قريب)
+HUD: Whole HUD|الهود: الواجهة كلها
+live; the game's own Disable HUD cheat: Hide switches the whole HUD off at once, Show brings it back|فوري؛ غش «Disable HUD» الأصلي: الإخفاء يطفئ الواجهة كلها دفعة واحدة، والإظهار يعيدها
+Game crosshair|مؤشر التصويب
+live; Hide removes the game's own aiming mark (the scope's stays)|فوري؛ الإخفاء يزيل علامة التصويب الأصلية للعبة (تبقى علامة المنظار)
+Squad mates|الرفاق
+Tough|أشرس
+Weak|أضعف
+live; Normal = the game's own. Tough: squad mates hit 3 times harder. Weak: they hit less than half as hard and miss more (wider aim error)|مباشر؛ عادي = كما في اللعبة. أشرس: الرفاق يضربون بقوة أكبر 3 أضعاف. أضعف: يضربون بأقل من نصف القوة ويخطئون أكثر (خطأ تصويب أوسع)
+HUD: Compass|الهود: البوصلة
+HUD: Health ring|الهود: حلقة الصحة
+HUD: Medkit count|الهود: عدد الإسعافات
+HUD: Revive icon|الهود: أيقونة الإحياء
+HUD: Stance icon|الهود: أيقونة الوضعية
+HUD: Ammo|الهود: الذخيرة
+HUD: Grenades|الهود: القنابل
+HUD: Adrenaline bar|الهود: شريط الأدرينالين
+HUD: Overheat meter|الهود: مقياس السخونة
+HUD: Stopwatch|الهود: ساعة التوقيت
+HUD: Demolition charge|الهود: شحنة التفجير
+HUD: Damage direction|الهود: اتجاه الضرر
+HUD: Hint text|الهود: نص التلميحات
+HUD: Out of ammo text|الهود: نص نفاد الذخيرة
+HUD: Squad commands|الهود: أوامر الفريق
+HUD: Nemesis card|الهود: بطاقة الزعيم
+HUD: Mission timer text|الهود: مؤقت المهمة
+applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen|يسري عند تحميل المهمة التالية (أعد تشغيل اللعبة إن لم يتغير شيء)؛ الإخفاء يبعد هذا الجزء من الواجهة خارج الشاشة
+HUD: Compass markers|الهود: علامات البوصلة
+live; hides the orange / blue / green arrows (objectives and squad mates) that the compass draws|مباشر؛ يخفي الأسهم البرتقالية والزرقاء والخضراء (الأهداف والرفاق) التي ترسمها البوصلة

@@ -8,6 +8,7 @@
  */
 #include "icon_swap.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,8 +22,13 @@
 
 #include "icon_table.h"
 #include "../d3d/d3d8_swizzle.h"        /* d3d8_dxt_decode_block: DXT1/DXT3/DXT5 blocks (tm_dds_native) */
+#define BCDEC_STATIC
+#define BCDEC_IMPLEMENTATION
+#include "../d3d/bcdec.h"               /* bcdec_bc4 / bcdec_bc5 / bcdec_bc7: the BC4, BC5, BC7 blocks (tm_dds_native) */
 
 #define MS 128                          /* the master art's size */
+
+static uint32_t *tm_load_picture(const char *path, uint32_t *out_w, uint32_t *out_h);
 
 static CRITICAL_SECTION s_cs;
 static volatile LONG s_cs_ready;
@@ -55,8 +61,10 @@ void icon_swap_publish(const IconView *v)
     if (memcmp(&s_view, v, sizeof s_view)) {
         s_view = *v;
         s_serial++;
+        static const char *const style_name[] = { " Xbox", " Xbox 360", " PS2/PS3", " PS4", " PS5" };
         fprintf(stderr, "  [ICONS] view: %s%s, pad %d %d %d %d (A B X Y) key A '%s' B '%s' Start '%s'\n",
-                v->device ? "gamepad" : "keyboard", v->device ? (v->style ? " PlayStation" : " Xbox") : "",
+                v->device ? "gamepad" : "keyboard",
+                v->device ? style_name[v->style >= 0 && v->style < 5 ? v->style : 0] : "",
                 v->pad[0], v->pad[1], v->pad[2], v->pad[3], v->key[0], v->key[1], v->key[10]);
         fflush(stderr);
     }
@@ -466,6 +474,81 @@ static void art_key(const char *key)
     m_clear(); m_text(w, 64, 56, 66, 108); paint(0x1B1B1B, 1.0f);
 }
 
+/* ---- the button sheets: mods\buttons\<style>.png ---------------------------------------------------
+ * 2048 x 256 = 16 x 2 cells of 128 x 128 in the game's own controller_buttons layout (the game's 512 x 64 sheet at 4x):
+ * row 0: Y X A B, two triggers, two bumpers, D-pad up left down right, L3 R3, stick pictures; row 1: Back Start, stick
+ * pictures. Styles 0 Xbox, 1 Xbox 360, 2 PS2/PS3, 3 PS4, 4 PS5 (files xbox, xbox360, ps2, ps4, ps5). A missing file
+ * leaves that style to the drawn art below. */
+#define SHEET_STYLES 5
+#define SH_W 2048
+#define SH_H 256
+static const char *const k_sheet_file[SHEET_STYLES] = { "xbox", "xbox360", "ps2", "ps4", "ps5" };
+static uint32_t *s_sheet[SHEET_STYLES];
+static signed char s_sheet_st[SHEET_STYLES];     /* 0 not tried, 1 loaded, -1 missing or the wrong size */
+
+static const uint32_t *sheet_get(int style)
+{
+    const char *d, *e;
+    char path[MAX_PATH + 32];
+    uint32_t w = 0, h = 0, *px;
+
+    if (style < 0 || style >= SHEET_STYLES)
+        return NULL;
+    if (s_sheet_st[style])
+        return s_sheet_st[style] > 0 ? s_sheet[style] : NULL;
+    s_sheet_st[style] = -1;
+    e = getenv("RECOMP_MODS");
+    d = getenv("RECOMP_MODS_DIR");
+    if (e && e[0] == '0')
+        return NULL;
+    snprintf(path, sizeof path, "%s\\buttons\\%s.png", d && d[0] ? d : "mods", k_sheet_file[style]);
+    px = tm_load_picture(path, &w, &h);
+    if (px && w == SH_W && h == SH_H) {
+        s_sheet[style] = px;
+        s_sheet_st[style] = 1;
+        fprintf(stderr, "  [ICONS] button sheet %s loaded\n", path);
+        fflush(stderr);
+        return px;
+    }
+    if (px) {
+        fprintf(stderr, "  [ICONS] button sheet %s is %ux%u, not %dx%d: not used\n", path, w, h, SH_W, SH_H);
+        free(px);
+    }
+    return NULL;
+}
+
+/* the cell of a physical pad button (PB_ order) in a style's sheet */
+static int sheet_cell(int style, int pb, int *row, int *col)
+{
+    static const signed char face[4] = { 2, 3, 1, 0 };           /* A B X Y */
+    *row = 0;
+    if (pb >= PB_A && pb <= PB_Y)
+        *col = face[pb];
+    else switch (pb) {
+    case PB_LB: *col = style == 0 ? 7 : style == 2 ? 4 : 6; break;   /* Xbox: the Black button; PS2: L1 */
+    case PB_RB: *col = style == 0 ? 6 : style == 2 ? 5 : 7; break;   /* Xbox: the White button; PS2: R1 */
+    case PB_LT: *col = style == 2 ? 6 : 4; break;
+    case PB_RT: *col = style == 2 ? 7 : 5; break;
+    case PB_L3: *col = 12; break;
+    case PB_R3: *col = 13; break;
+    case PB_DUP: *col = 8; break;
+    case PB_DLEFT: *col = 9; break;
+    case PB_DDOWN: *col = 10; break;
+    case PB_DRIGHT: *col = 11; break;
+    case PB_START: *row = 1; *col = 1; break;
+    case PB_BACK: *row = 1; *col = 0; break;
+    default: return 0;
+    }
+    return 1;
+}
+
+static void sheet_copy_cell(const uint32_t *sh, int row, int col, uint32_t *dst, uint32_t stride)
+{
+    int y;
+    for (y = 0; y < MS; y++)
+        memcpy(dst + (size_t)y * stride, sh + (size_t)(row * MS + y) * SH_W + (size_t)col * MS, MS * sizeof(uint32_t));
+}
+
 /* ---- the master per control, cached per view ---------------------------------------------------- */
 
 static uint32_t s_master[IC_COUNT][MS * MS];
@@ -473,6 +556,18 @@ static uint32_t s_master_ser[IC_COUNT];
 static int s_master_keep[IC_COUNT];      /* 1: the game's own art for this view */
 static IconView s_cur;                   /* the view the masters are drawn for */
 static uint32_t s_cur_ser;
+
+/* the control's picture straight from a sheet (style sheet, else the Xbox sheet): 1 when done */
+static int master_from_sheet(int ic, int style, int pb)
+{
+    const uint32_t *sh = sheet_get(style);
+    int row, col;
+
+    if (!sh || pb < 0 || !sheet_cell(style, pb, &row, &col))
+        return 0;
+    sheet_copy_cell(sh, row, col, s_master[ic], MS);
+    return 1;
+}
 
 static void master_for(int ic)
 {
@@ -482,17 +577,23 @@ static void master_for(int ic)
     s_master_keep[ic] = 0;
     if (s_cur.device) {
         pb = s_cur.pad[ic];
+        if (pb >= 0 && pb < IC_COUNT && master_from_sheet(ic, s_cur.style, pb))
+            return;
         if (pb == ic && !s_cur.style) {
             s_master_keep[ic] = 1;                    /* the game's Xbox art is already right */
             return;
         }
         if (pb < 0 || pb >= IC_COUNT) {
+            if (master_from_sheet(ic, 0, ic))
+                return;                               /* no pad button for it: the Xbox sheet's own picture */
             s_master_keep[ic] = 1;
             return;
         }
-        art_pad(s_cur.style, pb);
+        art_pad(s_cur.style >= 2, pb);                /* no sheet for this style: the drawn Xbox or PlayStation art */
     } else {
         if (!s_cur.key[ic][0]) {                      /* no key does this here: the game's own art stays */
+            if (master_from_sheet(ic, 0, ic))
+                return;
             s_master_keep[ic] = 1;
             return;
         }
@@ -603,6 +704,80 @@ int icon_swap_fill_sheet(uint32_t *dst, uint32_t w, uint32_t h)
 int icon_swap_match_sheet(uint32_t w, uint32_t h, uint32_t fmt, uint64_t hash)
 {
     return hash == 0xD5E66A646EF4891Bull || (w == 512 && h == 64 && fmt == 0x0B) ? 100 : 0;
+}
+
+/* The sharp path: with the Xbox sheet in mods\buttons the icons are made at 128 px per cell (the prompt sheet 2048 x 256,
+ * a glyph 128 x 128) instead of the game's 32 px, so the executor lays the texture out at that size (icon_swap_hires_size)
+ * and fills level 0 from here. */
+int icon_swap_hires_ok(void)
+{
+    return sheet_get(0) != NULL;
+}
+
+int icon_swap_hires_size(int code, uint32_t *w, uint32_t *h)
+{
+    if (!icon_swap_hires_ok())
+        return 0;
+    if (code == 100) {
+        *w = SH_W;
+        *h = SH_H;
+    } else {
+        *w = MS;
+        *h = MS;
+    }
+    return 1;
+}
+
+/* the Xbox sheet's picture of control `ic` when the redraw has nothing (or GDI is not up) */
+static void hires_plain_cell(int ic, uint32_t *dst, uint32_t stride)
+{
+    const uint32_t *sh = sheet_get(0);
+    int row, col, y;
+
+    if (sh && sheet_cell(0, ic, &row, &col))
+        sheet_copy_cell(sh, row, col, dst, stride);
+    else
+        for (y = 0; y < MS; y++)
+            memset(dst + (size_t)y * stride, 0, MS * sizeof(uint32_t));
+}
+
+int icon_swap_fill_hires(int code, uint32_t *dst, uint32_t w, uint32_t h)
+{
+    if (code == 100) {
+        const uint32_t *sh;
+        int style, row, col;
+        uint32_t ser;
+
+        if (w != SH_W || h != SH_H)
+            return 0;
+        ic_lock();
+        ser = s_serial;
+        if (ser != s_cur_ser) {
+            s_cur = s_view;
+            s_cur_ser = ser;
+        }
+        style = s_cur.device ? s_cur.style : 0;
+        ic_unlock();
+        sh = sheet_get(style);
+        if (!sh)
+            sh = sheet_get(0);
+        if (!sh)
+            return 0;
+        memcpy(dst, sh, (size_t)SH_W * SH_H * sizeof(uint32_t));     /* the stick pictures and whatever is not redrawn */
+        for (row = 0; row < 2; row++)
+            for (col = 0; col < 16; col++) {
+                int ic = k_sheet_cell[row][col];
+                uint32_t *cell = dst + (size_t)row * MS * SH_W + (size_t)col * MS;
+                if (ic >= 0 && !fill_cell(ic, cell, SH_W, MS, MS))
+                    hires_plain_cell(ic, cell, SH_W);
+            }
+        return 1;
+    }
+    if (w != MS || h != MS || code < 1)
+        return 0;
+    if (!fill_cell(code - 1, dst, MS, MS, MS))
+        hires_plain_cell(code - 1, dst, MS);
+    return 1;
 }
 
 /* ---- the texture dump and the texture mods ------------------------------------------------------ */
@@ -857,6 +1032,8 @@ static void texmod_scan_dir(const char *dir)
     FindClose(h);
 }
 
+static void tma_preload_from_file(const char *root);   /* below: the async picture loader */
+
 static void texmod_init(void)
 {
     const char *e = getenv("RECOMP_MODS"), *d = getenv("RECOMP_MODS_DIR");
@@ -884,6 +1061,7 @@ static void texmod_init(void)
     if (s_mt_n) {
         fprintf(stderr, "  [TEXMOD] %d replacement texture(s) found under %s\n", s_mt_n, root);
         fflush(stderr);
+        tma_preload_from_file(root);
     }
 }
 
@@ -893,8 +1071,8 @@ typedef struct { UINT32 version; void *callback; BOOL no_thread; BOOL no_codecs;
 
 /* DDS read from the file itself, first. Windows' own DDS codec (WIC) reads DXT1/DXT3/DXT5 but refuses uncompressed
  * files and BC4-BC7 (checked on this machine with real files), so: uncompressed 24/32-bit RGB(A) with masks, and
- * DXT1/DXT3/DXT5 (BC1-BC3), with the old or the DX10 header, first level only. Returns malloc'ed 0xAARRGGBB, or NULL
- * for any other format (tm_load_picture then tries WIC). */
+ * DXT1/DXT3/DXT5 (BC1-BC3), BC4, BC5, BC7, with the old or the DX10 header, first level only. Returns malloc'ed
+ * 0xAARRGGBB, or NULL for any other format (BC6H: tm_load_picture then tries WIC). */
 static uint32_t dds_get32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -909,6 +1087,10 @@ static uint32_t dds_chan8(uint32_t v, uint32_t width)
     maxv = (1u << width) - 1u;
     return (v * 255u + maxv / 2u) / maxv;
 }
+
+#define DDS_BC4 0x104u                  /* block codes beyond the DXT ones (0x0C/0x0E/0x0F) that d3d8_dxt_decode_block knows */
+#define DDS_BC5 0x105u
+#define DDS_BC7 0x107u
 
 static uint32_t *tm_dds_native(const char *path, uint32_t *out_w, uint32_t *out_h)
 {
@@ -960,6 +1142,9 @@ static uint32_t *tm_dds_native(const char *path, uint32_t *out_w, uint32_t *out_
             case 71: case 72: fmt = 0x0C; break;                    /* BC1 */
             case 74: case 75: fmt = 0x0E; break;                    /* BC2 */
             case 77: case 78: fmt = 0x0F; break;                    /* BC3 */
+            case 79: case 80: fmt = DDS_BC4; break;                 /* BC4 (unorm) */
+            case 82: case 83: fmt = DDS_BC5; break;                 /* BC5 (unorm) */
+            case 97: case 98: case 99: fmt = DDS_BC7; break;        /* BC7 (typeless, unorm, sRGB) */
             case 87: case 88: case 91: case 93:                     /* B8G8R8A8 / B8G8R8X8 */
                 bits = 32;
                 m[0] = 0x00FF0000u; m[1] = 0x0000FF00u; m[2] = 0x000000FFu;
@@ -970,7 +1155,7 @@ static uint32_t *tm_dds_native(const char *path, uint32_t *out_w, uint32_t *out_
                 m[0] = 0x000000FFu; m[1] = 0x0000FF00u; m[2] = 0x00FF0000u; m[3] = 0xFF000000u;
                 break;
             default:
-                goto fail;                                          /* BC4-BC7 and the rest */
+                goto fail;                                          /* BC6H and the rest */
             }
         } else if (fourcc == 0x31545844u) {                         /* 'DXT1' */
             fmt = 0x0C;
@@ -978,15 +1163,19 @@ static uint32_t *tm_dds_native(const char *path, uint32_t *out_w, uint32_t *out_
             fmt = 0x0E;
         } else if (fourcc == 0x34545844u || fourcc == 0x35545844u) {    /* 'DXT4', 'DXT5' */
             fmt = 0x0F;
+        } else if (fourcc == 0x31495441u || fourcc == 0x55344342u) {    /* 'ATI1', 'BC4U' */
+            fmt = DDS_BC4;
+        } else if (fourcc == 0x32495441u || fourcc == 0x55354342u) {    /* 'ATI2', 'BC5U' */
+            fmt = DDS_BC5;
         } else {
-            goto fail;                                              /* 'ATI1' / 'ATI2' (BC4 / BC5) and the rest */
+            goto fail;                                              /* the rest */
         }
     } else if (!(pf_flags & 0x40u)) {
         goto fail;                                                  /* no FourCC and not RGB */
     }
 
     if (fmt) {
-        bb = fmt == 0x0C ? 8u : 16u;
+        bb = (fmt == 0x0C || fmt == DDS_BC4) ? 8u : 16u;
         bw = (w + 3u) / 4u;
         bh = (h + 3u) / 4u;
         if ((uint64_t)off + (uint64_t)bw * bh * bb > (uint64_t)size)
@@ -997,7 +1186,28 @@ static uint32_t *tm_dds_native(const char *path, uint32_t *out_w, uint32_t *out_
         for (by = 0; by < bh; by++)
             for (bx = 0; bx < bw; bx++) {
                 uint32_t blk[16];
-                d3d8_dxt_decode_block(file + off + ((size_t)by * bw + bx) * bb, fmt, blk);
+                const uint8_t *src = file + off + ((size_t)by * bw + bx) * bb;
+                if (fmt == DDS_BC7) {
+                    bcdec_bc7(src, blk, 16);                        /* RGBA bytes -> 0xAABBGGRR, swap R and B below */
+                    for (i = 0; i < 16; i++)
+                        blk[i] = (blk[i] & 0xFF00FF00u) | ((blk[i] & 0xFFu) << 16) | ((blk[i] >> 16) & 0xFFu);
+                } else if (fmt == DDS_BC4) {
+                    uint8_t r[16];
+                    bcdec_bc4(src, r, 4);
+                    for (i = 0; i < 16; i++)
+                        blk[i] = 0xFF000000u | ((uint32_t)r[i] * 0x010101u);
+                } else if (fmt == DDS_BC5) {
+                    uint8_t rg[32];
+                    bcdec_bc5(src, rg, 8);
+                    for (i = 0; i < 16; i++) {                      /* normal map: blue = the z that makes a unit vector */
+                        float nx = rg[i * 2] / 127.5f - 1.0f, ny = rg[i * 2 + 1] / 127.5f - 1.0f;
+                        float nz2 = 1.0f - nx * nx - ny * ny, nz = nz2 > 0.0f ? sqrtf(nz2) : 0.0f;
+                        blk[i] = 0xFF000000u | ((uint32_t)rg[i * 2] << 16) | ((uint32_t)rg[i * 2 + 1] << 8)
+                                 | (uint32_t)(nz * 127.5f + 127.5f);
+                    }
+                } else {
+                    d3d8_dxt_decode_block(src, fmt, blk);
+                }
                 for (i = 0; i < 16; i++) {
                     x = bx * 4u + (i & 3u);
                     y = by * 4u + (i >> 2);
@@ -1048,6 +1258,11 @@ fail:
  * straight-alpha BGRA. The GUIDs are the public ones; a wrong one only makes the picture fail to load. */
 static __declspec(thread) int tm_com;
 
+/* A spin lock for the one-time library set-up of the picture loaders (executor thread and texmod workers). */
+static volatile LONG s_tm_spin;
+static void tm_lock(void)   { while (InterlockedCompareExchange(&s_tm_spin, 1, 0)) Sleep(0); }
+static void tm_unlock(void) { InterlockedExchange(&s_tm_spin, 0); }
+
 static uint32_t *tm_load_dds(const char *path, uint32_t *out_w, uint32_t *out_h)
 {
     typedef HRESULT (WINAPI *init_fn)(LPVOID, DWORD);
@@ -1066,13 +1281,18 @@ static uint32_t *tm_load_dds(const char *path, uint32_t *out_w, uint32_t *out_h)
     UINT w = 0, h = 0;
     uint32_t *px = NULL;
 
+    tm_lock();                                       /* the texmod workers load pictures too */
     if (!ole) {
-        ole = LoadLibraryA("ole32.dll");
-        if (!ole)
-            return NULL;
-        co_init = (init_fn)GetProcAddress(ole, "CoInitializeEx");
-        co_create = (create_fn)GetProcAddress(ole, "CoCreateInstance");
+        HMODULE m = LoadLibraryA("ole32.dll");
+        if (m) {
+            co_init = (init_fn)GetProcAddress(m, "CoInitializeEx");
+            co_create = (create_fn)GetProcAddress(m, "CoCreateInstance");
+            ole = m;
+        }
     }
+    tm_unlock();
+    if (!ole)
+        return NULL;
     if (!co_init || !co_create)
         return NULL;
     if (!tm_com) {
@@ -1143,28 +1363,29 @@ static uint32_t *tm_load_picture(const char *path, uint32_t *out_w, uint32_t *ou
         uint32_t *dx = tm_dds_native(path, out_w, out_h);
         return dx ? dx : tm_load_dds(path, out_w, out_h);
     }
+    tm_lock();                                       /* set-up once, whichever thread comes first */
     if (!gp) {
-        gp = LoadLibraryA("gdiplus.dll");
-        if (!gp)
-            return NULL;
-        startup  = (startup_fn)GetProcAddress(gp, "GdiplusStartup");
-        fromfile = (fromfile_fn)GetProcAddress(gp, "GdipCreateBitmapFromFile");
-        get_w    = (dim_fn)GetProcAddress(gp, "GdipGetImageWidth");
-        get_h    = (dim_fn)GetProcAddress(gp, "GdipGetImageHeight");
-        lock     = (lock_fn)GetProcAddress(gp, "GdipBitmapLockBits");
-        unlock   = (unlock_fn)GetProcAddress(gp, "GdipBitmapUnlockBits");
-        dispose  = (dispose_fn)GetProcAddress(gp, "GdipDisposeImage");
-    }
-    if (!startup || !fromfile || !get_w || !get_h || !lock || !unlock || !dispose)
-        return NULL;
-    if (!token) {
-        memset(&su, 0, sizeof su);
-        su.version = 1;
-        if (startup(&token, &su, NULL) != 0) {
-            token = 0;
-            return NULL;
+        HMODULE m = LoadLibraryA("gdiplus.dll");
+        if (m) {
+            startup  = (startup_fn)GetProcAddress(m, "GdiplusStartup");
+            fromfile = (fromfile_fn)GetProcAddress(m, "GdipCreateBitmapFromFile");
+            get_w    = (dim_fn)GetProcAddress(m, "GdipGetImageWidth");
+            get_h    = (dim_fn)GetProcAddress(m, "GdipGetImageHeight");
+            lock     = (lock_fn)GetProcAddress(m, "GdipBitmapLockBits");
+            unlock   = (unlock_fn)GetProcAddress(m, "GdipBitmapUnlockBits");
+            dispose  = (dispose_fn)GetProcAddress(m, "GdipDisposeImage");
+            gp = m;
         }
     }
+    if (gp && startup && !token) {
+        memset(&su, 0, sizeof su);
+        su.version = 1;
+        if (startup(&token, &su, NULL) != 0)
+            token = 0;
+    }
+    tm_unlock();
+    if (!token || !fromfile || !get_w || !get_h || !lock || !unlock || !dispose)
+        return NULL;
     if (!MultiByteToWideChar(CP_ACP, 0, path, -1, wide, MAX_PATH)
         || !GetFullPathNameW(wide, MAX_PATH, full, NULL))
         return NULL;
@@ -1212,6 +1433,310 @@ uint32_t *texmod_load(uint64_t hash, uint32_t *w, uint32_t *h)
     return NULL;
 }
 
+/* The blood stain atlas (blood_stain.c): <mods>\blood\atlas.png, straight alpha 0xAARRGGBB, malloc'ed, or NULL. */
+uint32_t *stain_atlas_load(uint32_t *w, uint32_t *h)
+{
+    const char *e = getenv("RECOMP_MODS"), *d = getenv("RECOMP_MODS_DIR");
+    char path[MAX_PATH];
+    uint32_t *px;
+    if (e && e[0] == '0')
+        return NULL;
+    snprintf(path, sizeof path, "%s\\blood\\atlas.png", d && d[0] ? d : "mods");
+    px = tm_load_picture(path, w, h);
+    fprintf(stderr, "[STAIN] atlas %s: %s\n", path, px ? "loaded" : "not found (the small drawn splat is used)");
+    return px;
+}
+
+/* 1 when a picture for this hash was found by the scan (the file is not opened). */
+int texmod_has(uint64_t hash)
+{
+    int i;
+    if (!s_mt_init)
+        texmod_init();
+    for (i = s_mt_n - 1; i >= 0; i--)
+        if (s_mt[i].hash == hash)
+            return 1;
+    return 0;
+}
+
+/* ---- texmod pictures loaded off the executor thread ---------------------------------------------------------------
+ * A 2048 or 4096 px AI-upscaled picture takes tens to hundreds of milliseconds to read, convert and mip down, and the
+ * executor thread did that the first time a texture was drawn: one stutter per texture, dozens in a row at a level's
+ * start. Now worker threads do it (read + full mip chain, in the layout of the decoded-texture slots), and the executor
+ * only asks: the game's own pixels are drawn until the picture is ready, then the slot takes the buffer as it is.
+ * Hashes that were asked for in earlier runs are listed in <mods>\texmod_used.txt and loaded in advance at start-up
+ * (up to TMA_PRELOAD_BYTES of ready pictures waiting), so most are ready before the first draw. */
+#define TMA_MAX_LEVELS 12                            /* TEXDEC_MAX_LEVELS in nv2a_pb_exec.c */
+#define TMA_CAP 4096
+static uint64_t s_tma_preload_bytes = 1ull << 30;   /* set in tma_start: 2 GB (1 GB on 8 GB machines), RECOMP_TEXMOD_PRELOAD_MB */
+enum { TMA_FREE, TMA_QUEUED, TMA_LOADING, TMA_READY, TMA_FAILED };
+typedef struct { uint64_t hash; int state; int prefetch; uint32_t *buf; uint32_t w, h, total; } TmaJob;
+static TmaJob s_tma[TMA_CAP];
+static int s_tma_n, s_tma_started;
+static uint64_t s_tma_ready_bytes;
+static CRITICAL_SECTION s_tma_cs;
+static HANDLE s_tma_sem;
+static char s_used_path[MAX_PATH];
+static uint64_t *s_used;
+static int s_used_n, s_used_cap;
+
+static const char *texmod_path(uint64_t hash)
+{
+    int i;
+    for (i = s_mt_n - 1; i >= 0; i--)
+        if (s_mt[i].hash == hash)
+            return s_mt[i].path;
+    return NULL;
+}
+
+/* s_tma_cs held */
+static int tma_used_has(uint64_t h)
+{
+    int i;
+    for (i = 0; i < s_used_n; i++)
+        if (s_used[i] == h)
+            return 1;
+    return 0;
+}
+
+/* The picture, with its mip chain made, in one malloc'ed block laid out as the slots want it. */
+static uint32_t *tma_build(const char *path, uint32_t *ow, uint32_t *oh, uint32_t *ototal)
+{
+    uint32_t rw = 0, rh = 0, *pic, *buf, lo[TMA_MAX_LEVELS], lw[TMA_MAX_LEVELS], lh[TMA_MAX_LEVELS];
+    uint32_t n = 0, w, h, lv;
+    size_t total = 0;
+
+    pic = tm_load_picture(path, &rw, &rh);
+    if (!pic || !rw || !rh) {
+        free(pic);
+        return NULL;
+    }
+    w = rw;
+    h = rh;
+    for (;;) {
+        lw[n] = w; lh[n] = h; lo[n] = (uint32_t)total;
+        total += (size_t)w * h;
+        n++;
+        if ((w <= 1 && h <= 1) || n >= TMA_MAX_LEVELS)
+            break;
+        w = w > 1 ? w >> 1 : 1;
+        h = h > 1 ? h >> 1 : 1;
+    }
+    buf = (uint32_t *)realloc(pic, total * 4);
+    if (!buf) {
+        free(pic);
+        return NULL;
+    }
+    for (lv = 1; lv < n; lv++)
+        texmod_downsample(buf + lo[lv - 1], lw[lv - 1], lh[lv - 1], buf + lo[lv]);
+    *ow = rw;
+    *oh = rh;
+    *ototal = (uint32_t)total;
+    return buf;
+}
+
+static DWORD WINAPI tma_worker(LPVOID arg)
+{
+    (void)arg;
+    for (;;) {
+        int i, pick = -1;
+        uint64_t hash = 0;
+        const char *path;
+        char pcopy[MAX_PATH];
+        uint32_t *buf, w = 0, h = 0, total = 0;
+        int prefetch = 0, pass, record = 0;
+
+        WaitForSingleObject(s_tma_sem, INFINITE);
+        EnterCriticalSection(&s_tma_cs);
+        for (pass = 0; pass < 2 && pick < 0; pass++) {        /* asked-for pictures first, then the preload */
+            if (pass == 1 && s_tma_ready_bytes >= s_tma_preload_bytes)
+                break;
+            for (i = 0; i < s_tma_n; i++)
+                if (s_tma[i].state == TMA_QUEUED && (pass == 1) == (s_tma[i].prefetch != 0)) {
+                    pick = i;
+                    break;
+                }
+        }
+        if (pick >= 0) {
+            s_tma[pick].state = TMA_LOADING;
+            hash = s_tma[pick].hash;
+            prefetch = s_tma[pick].prefetch;
+        }
+        LeaveCriticalSection(&s_tma_cs);
+        if (pick < 0)
+            continue;
+        path = texmod_path(hash);
+        pcopy[0] = 0;
+        if (path)
+            snprintf(pcopy, sizeof pcopy, "%s", path);
+        buf = pcopy[0] ? tma_build(pcopy, &w, &h, &total) : NULL;
+        EnterCriticalSection(&s_tma_cs);
+        s_tma[pick].buf = buf;
+        s_tma[pick].w = w;
+        s_tma[pick].h = h;
+        s_tma[pick].total = total;
+        s_tma[pick].state = buf ? TMA_READY : TMA_FAILED;
+        if (buf)
+            s_tma_ready_bytes += (uint64_t)total * 4;
+        if (!prefetch && s_used_path[0] && !tma_used_has(hash)) {   /* remember it for the next run's preload */
+            if (s_used_n == s_used_cap) {
+                uint64_t *p = (uint64_t *)realloc(s_used, (size_t)(s_used_cap ? s_used_cap * 2 : 1024) * sizeof *p);
+                if (p) {
+                    s_used = p;
+                    s_used_cap = s_used_cap ? s_used_cap * 2 : 1024;
+                }
+            }
+            if (s_used_n < s_used_cap) {
+                s_used[s_used_n++] = hash;
+                record = 1;
+            }
+        }
+        LeaveCriticalSection(&s_tma_cs);
+        if (record) {                                /* the disk write is outside the lock the executor takes */
+            FILE *f = fopen(s_used_path, "a");
+            if (f) {
+                fprintf(f, "%016llx\n", (unsigned long long)hash);
+                fclose(f);
+            }
+        }
+        if (!buf) {
+            static volatile LONG logged;
+            if (InterlockedIncrement(&logged) <= 80) {
+                fprintf(stderr, "  [TEXMOD] %016llx could not be read\n", (unsigned long long)hash);
+                fflush(stderr);
+            }
+        }
+    }
+    return 0;
+}
+
+static void tma_start(void)
+{
+    int i, nw;
+    SYSTEM_INFO si;
+    tm_lock();
+    if (!s_tma_started) {
+        MEMORYSTATUSEX ms;
+        const char *pe = getenv("RECOMP_TEXMOD_PRELOAD_MB");
+        memset(&ms, 0, sizeof ms);
+        ms.dwLength = sizeof ms;
+        s_tma_preload_bytes = (GlobalMemoryStatusEx(&ms) && ms.ullTotalPhys <= (9ull << 30)) ? (1ull << 30) : (2ull << 30);
+        if (pe && *pe)
+            s_tma_preload_bytes = (uint64_t)atoi(pe) << 20;
+        InitializeCriticalSection(&s_tma_cs);
+        s_tma_sem = CreateSemaphoreA(NULL, 0, 1 << 20, NULL);
+        GetSystemInfo(&si);
+        nw = si.dwNumberOfProcessors >= 8 ? 3 : 2;
+        for (i = 0; i < nw; i++) {
+            HANDLE th = CreateThread(NULL, 0, tma_worker, NULL, 0, NULL);
+            if (th) {
+                SetThreadPriority(th, THREAD_PRIORITY_BELOW_NORMAL);
+                CloseHandle(th);
+            }
+        }
+        s_tma_started = 1;
+    }
+    tm_unlock();
+}
+
+/* s_tma_cs held; a slot for a new job (or NULL) */
+static TmaJob *tma_new(uint64_t hash, int prefetch)
+{
+    int i;
+    for (i = 0; i < s_tma_n; i++)
+        if (s_tma[i].state == TMA_FREE)
+            break;
+    if (i == s_tma_n) {
+        if (s_tma_n >= TMA_CAP)
+            return NULL;
+        s_tma_n++;
+    }
+    memset(&s_tma[i], 0, sizeof s_tma[i]);
+    s_tma[i].hash = hash;
+    s_tma[i].state = TMA_QUEUED;
+    s_tma[i].prefetch = prefetch;
+    ReleaseSemaphore(s_tma_sem, 1, NULL);
+    return &s_tma[i];
+}
+
+/* After the scan: queue the pictures earlier runs asked for. */
+static void tma_preload_from_file(const char *root)
+{
+    FILE *f;
+    unsigned long long v;
+    snprintf(s_used_path, sizeof s_used_path, "%s\\texmod_used.txt", root);
+    f = fopen(s_used_path, "r");
+    tma_start();
+    EnterCriticalSection(&s_tma_cs);
+    if (f) {
+        int queued = 0;
+        while (fscanf(f, "%llx", &v) == 1) {
+            if (s_used_n == s_used_cap) {
+                uint64_t *p = (uint64_t *)realloc(s_used, (size_t)(s_used_cap ? s_used_cap * 2 : 1024) * sizeof *p);
+                if (!p)
+                    break;
+                s_used = p;
+                s_used_cap = s_used_cap ? s_used_cap * 2 : 1024;
+            }
+            if (tma_used_has(v))
+                continue;
+            s_used[s_used_n++] = v;
+            if (texmod_path(v) && tma_new(v, 1))
+                queued++;
+        }
+        fclose(f);
+        if (queued) {
+            fprintf(stderr, "  [TEXMOD] preloading %d picture(s) used in earlier runs\n", queued);
+            fflush(stderr);
+        }
+    }
+    LeaveCriticalSection(&s_tma_cs);
+}
+
+/* The executor's side. 0 = no picture for this hash. 1 = on its way (draw the game's pixels for now, ask again
+ * later). 2 = ready: *buf is a malloc'ed block of every level (level 0 = *w x *h, then halves down to 1 x 1, at most
+ * TMA_MAX_LEVELS), *total texels, the caller's to free. 3 = could not be read. A ready picture over max_bytes stays
+ * for a later call (the caller spreads GPU uploads over frames). */
+int texmod_async_take(uint64_t hash, uint64_t max_bytes, uint32_t **buf, uint32_t *w, uint32_t *h, uint32_t *total)
+{
+    int i, r = 1;
+    if (!s_mt_init)
+        texmod_init();
+    if (!texmod_path(hash))
+        return 0;
+    if (!s_tma_started)
+        tma_start();
+    EnterCriticalSection(&s_tma_cs);
+    for (i = 0; i < s_tma_n; i++)
+        if (s_tma[i].state != TMA_FREE && s_tma[i].hash == hash)
+            break;
+    if (i == s_tma_n) {
+        if (!tma_new(hash, 0))
+            r = 3;                                   /* the table is full: the game's pixels stay */
+    } else if (s_tma[i].state == TMA_FAILED) {
+        s_tma[i].state = TMA_FREE;
+        r = 3;
+    } else if (s_tma[i].state == TMA_READY) {
+        if ((uint64_t)s_tma[i].total * 4 <= max_bytes) {
+            *buf = s_tma[i].buf;
+            *w = s_tma[i].w;
+            *h = s_tma[i].h;
+            *total = s_tma[i].total;
+            s_tma_ready_bytes -= (uint64_t)s_tma[i].total * 4;
+            s_tma[i].buf = NULL;
+            s_tma[i].state = TMA_FREE;
+            ReleaseSemaphore(s_tma_sem, 1, NULL);    /* room for the preload to go on */
+            r = 2;
+        }
+    } else {
+        if (s_tma[i].state == TMA_QUEUED && s_tma[i].prefetch)
+            ReleaseSemaphore(s_tma_sem, 1, NULL);    /* the preload's wake-ups may all be spent: wake a worker for it */
+        s_tma[i].prefetch = 0;                       /* wanted now: the preload limit no longer holds it back */
+    }
+    LeaveCriticalSection(&s_tma_cs);
+    return r;
+}
+
 /* One mip down: 2 x 2 average, alpha-weighted. dst is max(sw/2,1) x max(sh/2,1). */
 void texmod_downsample(const uint32_t *src, uint32_t sw, uint32_t sh, uint32_t *dst)
 {
@@ -1253,6 +1778,13 @@ void icon_swap_dump(const uint32_t *a, uint32_t w, uint32_t h, uint32_t f, uint6
 int icon_swap_fill_sheet(uint32_t *d, uint32_t w, uint32_t h) { (void)d; (void)w; (void)h; return 0; }
 int icon_swap_match_sheet(uint32_t w, uint32_t h, uint32_t f, uint64_t x) { (void)w; (void)h; (void)f; (void)x; return 0; }
 uint32_t *texmod_load(uint64_t hash, uint32_t *w, uint32_t *h) { (void)hash; (void)w; (void)h; return 0; }
+uint32_t *stain_atlas_load(uint32_t *w, uint32_t *h) { (void)w; (void)h; return 0; }
+int icon_swap_hires_ok(void) { return 0; }
+int icon_swap_hires_size(int c, uint32_t *w, uint32_t *h) { (void)c; (void)w; (void)h; return 0; }
+int icon_swap_fill_hires(int c, uint32_t *d, uint32_t w, uint32_t h) { (void)c; (void)d; (void)w; (void)h; return 0; }
+int texmod_has(uint64_t hash) { (void)hash; return 0; }
+int texmod_async_take(uint64_t hash, uint64_t m, uint32_t **b, uint32_t *w, uint32_t *h, uint32_t *t)
+{ (void)hash; (void)m; (void)b; (void)w; (void)h; (void)t; return 0; }
 void texmod_downsample(const uint32_t *s, uint32_t sw, uint32_t sh, uint32_t *d) { (void)s; (void)sw; (void)sh; (void)d; }
 
 #endif

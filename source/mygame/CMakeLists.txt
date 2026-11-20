@@ -93,6 +93,7 @@ set(GAME_SOURCES
     src/recomp_manual.c
     src/game_patches.c
     src/recomp_settings.c
+    src/hud_hide.c
     # Add game-specific sources here, e.g.:
     # src/asset_loader.c
     # src/custom_renderer.c

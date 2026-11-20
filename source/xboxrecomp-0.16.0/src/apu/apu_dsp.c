@@ -280,9 +280,35 @@ void mcpx_apu_update_dsp_preference(MCPXAPUState *d)
     (void)d;
 }
 
+/* RECOMP_APU_3D: energy of the final stereo output (post downmix, post clamp), read and cleared by apu_vp.c's [RMS] line. */
+static double s_out_sq[2];
+void mcpx_apu_dsp_take_lr(double *l, double *r)
+{
+    *l = s_out_sq[0]; *r = s_out_sq[1];
+    s_out_sq[0] = s_out_sq[1] = 0.0;
+}
+
+/* Stereo width in percent, 0 (mono) .. 100 (the game's own mix); default 30. RECOMP_AUDIO_WIDTH (ini audio_width) sets it at start, the
+ * Recomp Settings row changes it live. */
+static volatile float s_width = -1.0f;
+int apu_stereo_width_get(void)
+{
+    if (s_width < 0.0f) {
+        const char *e = getenv("RECOMP_AUDIO_WIDTH");
+        int v = e && *e ? atoi(e) : 100;
+        s_width = v <= 0 ? 0.0f : 1.0f;     /* two modes only: 0 = mono, anything else = the game's own mix */
+    }
+    return (int)(s_width * 100.0f + 0.5f);
+}
+void apu_stereo_width_set(int pct)
+{
+    s_width = pct <= 0 ? 0.0f : 1.0f;
+}
+
 void mcpx_apu_dsp_frame(MCPXAPUState *d,
                          float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME])
 {
+    if (s_width < 0.0f) (void)apu_stereo_width_get();
     /* Bypass DSP: take mixbin 0 (front-left) and mixbin 1 (front-right)
      * and write them directly to the monitor frame buffer as the final
      * EP output.
@@ -357,11 +383,35 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d,
                 left = mixbins[0][i];
                 right = mixbins[1][i];
             }
+            /* Stereo width (mid/side). The game pans a source past ~45 degrees from the nose entirely into one ear (the other ear
+             * gets exactly nothing), and a sound turned to the side vanishes on headphones. M = (L+R)/2, S = (L-R)/2,
+             * L' = M + w*S, R' = M - w*S: a centred sound is unchanged, nothing gets louder than the louder ear was, w = 1 is the
+             * game's own mix and w = 0 is mono. Two multiply-adds per frame. */
+            if (s_width < 1.0f) {
+                const float m = 0.5f * (left + right), s = 0.5f * (left - right) * s_width;
+                left = m + s;
+                right = m - s;
+            }
+
             /* Clamp to [-1, 1] range */
             if (left > 1.0f) left = 1.0f;
             if (left < -1.0f) left = -1.0f;
             if (right > 1.0f) right = 1.0f;
             if (right < -1.0f) right = -1.0f;
+
+            /* RECOMP_AUDIO_SWAP=1: left and right trade places at the very end (an A/B for "sound fades on one side": does the
+             * fade follow the output channel, or the content?). Off by default, one test of a cached flag. */
+            {
+                static int swap = -1;
+                if (swap < 0) {
+                    const char *e = getenv("RECOMP_AUDIO_SWAP");
+                    swap = e && *e == '1';
+                }
+                if (swap) { float t = left; left = right; right = t; }
+            }
+
+            s_out_sq[0] += (double)left * left;
+            s_out_sq[1] += (double)right * right;
 
             /* Convert to 16-bit and write (not accumulate) into frame buffer.
              * Each of the 8 sub-frames writes its own 32-sample slice. */

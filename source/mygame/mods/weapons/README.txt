@@ -12,6 +12,10 @@ MagazineSize=<n>   Rounds per magazine. Takes effect at the next reload.
                    عدد الطلقات في المخزن. يسري عند الإعادة التالية.
 Damage=<float>     Damage of one bullet. 500 kills in one hit.
                    ضرر الرصاصة الواحدة. 500 تقتل بطلقة واحدة.
+                   IMPORTANT: this works only while "Damage mode" (Recomp Settings, F1 > Gameplay) is Normal.
+                   With "Low damage" the Damage line is IGNORED (hit counts are fixed by that mode).
+                   مهم: يعمل فقط عندما يكون "Damage mode" (إعدادات النسخة F1 > Gameplay) على Normal.
+                   مع "Low damage" يُتجاهَل سطر Damage (عدد الإصابات ثابت حسب ذلك الوضع).
 Spread=<float>     Scatter of the shots. Lower = tighter grouping, 0 = none.
                    تشتت الطلقات. الأقل = تجمّع أضيق، 0 = بلا تشتت.
 Recoil=<float>     Camera kick when firing. Lower = steadier, 0 = none.

@@ -318,6 +318,14 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         InterlockedExchange(&g_fb_capture_request, 1);
         return 0;
     }
+    /* F2: the screenshot plus a report of the next frame's draws in the log ("black ground" and the
+     * like): a player sends play_log.txt with the picture. (F2 is also the dev fog key, which acts only
+     * with RECOMP_DEV_KEYS=1.) */
+    if (m == WM_KEYDOWN && w == VK_F2 && !(l & (1 << 30))) {
+        InterlockedExchange(&g_fb_capture_request, 2);
+        InterlockedExchange(&g_screenshot_request, 1);
+        return 0;
+    }
     if (m == WM_KEYDOWN && w == VK_F12 && !(l & (1 << 30))) {
         InterlockedExchange(&g_screenshot_request, 1);
         return 0;
@@ -519,9 +527,11 @@ static float fb_aspect(void)
         const char *e = getenv("RECOMP_WIDESCREEN");
         wide = e && e[0] == '1';
     }
-    if (wide)
-        return 16.0f / 9.0f;
-    return s_fb_height ? (float)s_fb_width / (float)s_fb_height : 4.0f / 3.0f;
+    {
+        extern float recomp_present_aspect(float dflt);
+        float dflt = wide ? 16.0f / 9.0f : s_fb_height ? (float)s_fb_width / (float)s_fb_height : 4.0f / 3.0f;
+        return recomp_present_aspect(dflt);     /* ultrawide gameplay picture (nv2a_gpu.c) */
+    }
 }
 
 /* GDI: the frame letterboxed into the client area, like the D3D11

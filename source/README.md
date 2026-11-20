@@ -20,7 +20,7 @@ this repository. It is machine-translated Electronic Arts code, so it stays with
 hand edit made inside it is listed in `gen_hand_edits.txt` (file, line, function, the edited line) so it can be
 re-applied to a freshly generated copy. Only `recomp_types.h` (the register model, not game code) is included.
 
-To build you need your own copy of the game (USA / NTSC-U), the recompiler from the toolkit
+To build you need your own copy of the game (USA or European), the recompiler from the toolkit
 (`xboxrecomp-0.16.0/tools/recomp`, see its `docs/GETTING_STARTED.md`) and Visual Studio 2022 or later.
 This port's `gen` was produced by that recompiler and then post-processed (registers kept in locals, a few
 functions replaced by the hand-written versions in `recomp_manual.c` / `game_patches.c`); that post-processing

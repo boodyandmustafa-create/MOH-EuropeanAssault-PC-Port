@@ -73,6 +73,10 @@ void   mkb_set_sens(double v);
 int    mkb_get_invert_y(void);
 void   mkb_set_invert_y(int on);
 
+/* The grenade macro (grenade control down = take out + pull the pin, up = throw, then the weapon comes back), live. */
+int         mkb_gren_macro_get(void);
+void        mkb_gren_macro_set(int on);
+
 /* Sprint speed factor, seconds of sprint, seconds of full recovery, live (the settings menu). */
 float mkb_get_sprint_speed(void);
 void  mkb_set_sprint_speed(float v);
@@ -116,12 +120,13 @@ void mkb_bindings_reset(void);
 void mkb_bindings_write(void *file);                             /* the ini lines */
 /* ---- button prompts (icon_swap.c): which device the game's icons follow, and their art ----------
  * mode: 0 the last device used (pad or keyboard + mouse), 1 always the gamepad, 2 always the keyboard;
- * style: the gamepad art, 0 Xbox, 1 PlayStation. mkb_note_pad takes the pad as the hardware reported it;
+ * style: the gamepad art, 0 Xbox, 1 Xbox 360, 2 PS2/PS3, 3 PS4, 4 PS5 (mkb_set_icon_style_name: the ini value). mkb_note_pad takes the pad as the hardware reported it;
  * mkb_icons_poll is called as the game polls the pad and publishes the view when it changed. */
 int  mkb_get_icon_mode(void);
 void mkb_set_icon_mode(int mode);
 int  mkb_get_icon_style(void);
 void mkb_set_icon_style(int style);
+void mkb_set_icon_style_name(const char *value);
 void mkb_note_pad(const XBOX_INPUT_STATE *raw);
 void mkb_icons_poll(void);
 

@@ -30,6 +30,8 @@ double mkb_get_sens(void);
 void   mkb_set_sens(double v);
 int    mkb_get_invert_y(void);
 void   mkb_set_invert_y(int on);
+int         mkb_gren_macro_get(void);
+void        mkb_gren_macro_set(int on);
 float  game_fov_get(void);
 void   game_fov_set(float v);
 float  game_draw_get(void);
@@ -41,6 +43,9 @@ void   game_super_accuracy_set(int on);
 int    game_blood_get(void);
 void   game_blood_set(int l);
 const char *game_blood_name(int l);
+int    game_expsize_get(void);            /* recomp_manual.c: explosion size 0..4 (Normal, x1.5, x2, x3, x4) */
+void   game_expsize_set(int l);
+const char *game_expsize_name(int l);
 int    game_blood_color_get(void);
 void   game_blood_color_set(int i);
 const char *game_blood_color_name(int i);
@@ -63,8 +68,15 @@ void   game_blood_time_set(int i);
 float  game_blood_time_seconds(void);
 int    game_keep_get(void);
 void   game_keep_set(int n);
+int    game_corpse60_get(void);           /* game_patches.c: Havok at a 60 Hz step (the flying corpses fix; may freeze the game) */
+void   game_corpse60_set(int on);
 extern volatile int g_show_fps;
 int    recomp_screenfx_get(int kind);
+int    game_stain_get(void);                 /* blood_stain.c: blood stains on walls and floor, 0 Off .. 3 High */
+void   game_stain_set(int l);
+unsigned game_stain_nodes(void);            /* blood_stain.c: decal node pool size (stain_nodes=, default 1500) */
+void   game_stain_nodes_set(unsigned n);
+int    game_stain_nodes_pending(void);
 void   recomp_screenfx_set(int kind, int level);
 float  mkb_get_sprint_speed(void);
 void   mkb_set_sprint_speed(float v);
@@ -94,6 +106,63 @@ int  game_stambar_get(void);
 void game_stambar_set(int on);
 int  game_ec_get(void);                    /* ai_tuning.c: Enemy count 1..5 (1 = off) */
 void game_ec_set(int k);
+int  hudhide_get(int i);                   /* hud_hide.c: one switch per HUD element (Show / Hide) */
+void hudhide_set(int i, int v);
+void hudhide_ini_write(FILE *f);
+int  hudhide_ini_line(const char *line);
+void hudhide_rewrite(const WCHAR *rel, WCHAR *host, DWORD host_size);
+int  game_friends_get(void);               /* ai_tuning.c: Squad mates 0 Normal, 1 Tough, 2 Weak */
+void game_friends_set(int m);
+int  game_dmgmode_get(void);               /* ai_tuning.c: Damage mode 0 Normal, 1 Low damage */
+void game_dmgmode_set(int m);
+int  game_hitmark_get(void);               /* ai_tuning.c: the X at the centre when the player's shot hits (white) or kills (red) */
+void game_hitmark_set(int on);
+int  game_unlock_get(void);                /* ai_tuning.c: Unlock all missions (mission select shows every mission as completed) */
+void game_unlock_set(int on);
+int  game_cheat_ammo_get(void);            /* game_patches.c: the game's own Unlimited Ammo cheat (byte 0x37279C) */
+void game_cheat_ammo_set(int on);
+int  game_cheat_god_get(void);             /* game_patches.c: the game's own Invincible cheat (byte 0x37279E) */
+void game_cheat_god_set(int on);
+void game_cheat_rally_request(void);       /* game_patches.c: the game's own Full adrenaline meter (Rally Bar Filled) cheat, same way */
+void game_cheat_nemesis_request(void);     /* game_patches.c: the game's own Kill nemesis cheat, same way */
+int  game_cheat_noshock_get(void);         /* game_patches.c: Disable shellshock (byte 0x51D6C4) */
+void game_cheat_noshock_set(int on);
+int  game_cheat_nohud_get(void);           /* game_patches.c: Disable HUD (byte 0x3785A5) */
+void game_cheat_nohud_set(int on);
+int  game_autoswitch_get(void);           /* game_patches.c: switch to the other weapon when the magazine runs dry */
+void game_autoswitch_set(int on);
+int  game_egren_get(void);                /* game_patches.c: enemy grenades 0 off, 1 low, 2 medium, 3 high */
+void game_egren_set(int m);
+int  game_pain_get(void);                  /* game_sfx.c: pain / scream sounds of soldiers and the player (files in mods\sounds\pain) */
+void game_pain_set(int on);
+int  game_breath_get(void);                /* game_sfx.c: breathing while sprinting and when worn out (files in mods\sounds\breath) */
+void game_breath_set(int on);
+int  game_breathvol_get(void);             /* 10..100 */
+void game_breathvol_set(int v);
+int  game_painvol_get(void);               /* 10..100 */
+void game_painvol_set(int v);
+int  apu_stereo_width_get(void);           /* apu_dsp.c: 0 (mono) .. 100 (the game's own mix) */
+void apu_stereo_width_set(int pct);
+int  game_sway_get(void);                  /* game_sfx.c: the aim sways in a scope while the player's health is low */
+void game_sway_set(int on);
+int  game_swaystr_get(void);               /* 1..5 */
+void game_swaystr_set(int v);
+int  game_weaponlight_get(void);            /* recomp_manual.c: first-person weapon lighting, 0 Off .. 4 Extreme */
+void game_weaponlight_set(int v);
+int  game_gunsway_get(void);                /* recomp_manual.c: the weapon lags behind the camera turn (spring) */
+void game_gunsway_set(int on);
+int  game_gunswaystr_get(void);             /* 1..5 */
+void game_gunswaystr_set(int v);
+int  game_freecam_get(void);                /* recomp_manual.c: the free camera (Insert) */
+void game_freecam_set(int on);
+int  game_freecamworld_get(void);           /* 0 = the world stands still while it flies, 1 = it keeps running */
+void game_freecamworld_set(int v);
+int  game_freecamspeed_get(void);           /* 1..5 */
+void game_freecamspeed_set(int v);
+int  game_editor_get(void);                 /* map_editor.c (inside game_patches.c): the in-game map editor keys work */
+void game_editor_set(int on);
+int  texdec_crosshair_hide_get(void);     /* nv2a_pb_exec.c: hide the game's own aiming crosshair */
+void texdec_crosshair_hide_set(int on);
 int  game_eclvl_get(int lvl);              /* per difficulty on/off: 0 Recruit, 1 Veteran, 2 Elite, 3 Hero */
 void game_eclvl_set(int lvl, int v);
 int  game_grentm_get(void);
@@ -122,6 +191,10 @@ static int  s_res_n = 5;
 static int  s_fps = 60, s_res = 0, s_full = 0;            /* chosen */
 static int  s_split = 0, s_split_run = 0;                  /* split-screen pads: chosen / as this run started */
 static int  s_fps_run, s_res_run, s_full_run;             /* as this run started */
+/* Aspect ratio: 0 = 4:3 (widescreen off), 1 = 16:9 (the game's own widescreen), 2 = 21:9, 3 = auto (the window's shape) */
+static const char *const k_asp_names[] = { "4:3", "16:9", "21:9", "Auto" };
+static int  s_asp = 1, s_asp_run = 1;
+static char s_asp_env[24] = "";                            /* a custom RECOMP_ASPECT value (2.37 ...) kept as it was while the row is untouched */
 static int  s_has_super = -1;                             /* the ini's Super Accuracy, -1 = not there */
 static int  s_sdump, s_sdump_run;                         /* sound dump (RECOMP_SND_DUMP), chosen / as this run started */
 static int  s_tdump, s_tdump_run;                        /* texture dump: 0 off, 1 PNG, 2 DDS; chosen / as this run started */
@@ -131,6 +204,9 @@ static char s_lang_list[RS_MAXLANG][32] = { "english" };  /* "english" + every f
 static int  s_lang_n = 1;
 static int  s_lang, s_lang_run;                           /* chosen / as this run started */
 static int  s_rtl, s_curW, s_nomirror;
+/* F1 window: where the player left it (moved by the red bar, resized by the edges), as 1/10000 of the game picture:
+ * x, y, width, height. 0 = never touched: the middle of the game, 62% x 78%. ini menu_rect=x,y,w,h. */
+static int  s_win_user, s_win_fx, s_win_fy, s_win_fw, s_win_fh;
 static char s_mlang_list[RS_MAXLANG][32] = { "english" };   /* "english" + the packs that have a recomp_menu.txt */
 static int  s_mlang_n = 1;
 static int  s_mlang;
@@ -229,26 +305,52 @@ static void rs_save_known(FILE *f)
     fprintf(f, "; Written by the in-game Recomp Settings screen (Options > Credits). Safe to edit by hand.\n");
     fprintf(f, "sens=%.2f\n", mkb_get_sens());
     fprintf(f, "invert_y=%d\n", mkb_get_invert_y());
+    fprintf(f, "grenade_macro=%d\n", mkb_gren_macro_get());
     fprintf(f, "super_accuracy=%d\n", game_super_accuracy_get());
     fprintf(f, "blood=%d\n", game_blood_get());
+    fprintf(f, "explosion_size=%d\n", game_expsize_get());
     fprintf(f, "blood_color=%d\n", game_blood_color_get());
     fprintf(f, "blood_hue=%d\n", game_blood_hue_get());
     fprintf(f, "blood_sat=%d\n", game_blood_sat_get());
     fprintf(f, "blood_bright=%d\n", game_blood_bright_get());
     fprintf(f, "blood_time=%d\n", game_blood_time_get());
     fprintf(f, "keep_corpses=%d\n", game_keep_get());
+    fprintf(f, "corpse_60hz=%d\n", game_corpse60_get());
     fprintf(f, "fps_counter=%d\n", g_show_fps ? 1 : 0);
     fprintf(f, "screen_blood=%d\n", recomp_screenfx_get(0));
     fprintf(f, "screen_dirt=%d\n", recomp_screenfx_get(1));
+    fprintf(f, "blood_stains=%d\n", game_stain_get());
+    fprintf(f, "stain_nodes=%u\n", (unsigned)game_stain_nodes());
     fprintf(f, "lod=%d\n", game_lod_get());
     fprintf(f, "firecap=%d\n", game_fire_get());
     fprintf(f, "stamina_bar=%d\n", game_stambar_get());
     fprintf(f, "grenade_timer=%d\n", game_grentm_get());
+    fprintf(f, "damage_mode=%d\n", game_dmgmode_get());
+    fprintf(f, "hit_marker=%d\n", game_hitmark_get());
+    fprintf(f, "unlock_all=%d\n", game_unlock_get());
+    fprintf(f, "cheat_ammo=%d\n", game_cheat_ammo_get());
+    fprintf(f, "cheat_god=%d\n", game_cheat_god_get());
+    fprintf(f, "cheat_noshock=%d\n", game_cheat_noshock_get());
+    fprintf(f, "cheat_nohud=%d\n", game_cheat_nohud_get());
+    fprintf(f, "auto_switch=%d\n", game_autoswitch_get());
+    fprintf(f, "enemy_grenades=%d\n", game_egren_get());
+    fprintf(f, "pain_sounds=%d\n", game_pain_get());
+    fprintf(f, "pain_volume=%d\n", game_painvol_get());
+    fprintf(f, "audio_width=%d\n", apu_stereo_width_get());
+    fprintf(f, "breath_sounds=%d\n", game_breath_get());
+    fprintf(f, "breath_volume=%d\n", game_breathvol_get());
+    fprintf(f, "scope_sway=%d\n", game_sway_get());
+    fprintf(f, "scope_sway_strength=%d\n", game_swaystr_get());
+    fprintf(f, "weapon_light=%d\n", game_weaponlight_get());
+    fprintf(f, "gun_sway=%d\n", game_gunsway_get());
+    fprintf(f, "gun_sway_strength=%d\n", game_gunswaystr_get());
+    fprintf(f, "freecam_world=%d\n", game_freecamworld_get());
+    fprintf(f, "freecam_speed=%d\n", game_freecamspeed_get());
+    fprintf(f, "map_editor=%d\n", game_editor_get());
+    fprintf(f, "hide_crosshair=%d\n", texdec_crosshair_hide_get());
     fprintf(f, "enemy_count=%d\n", game_ec_get());
-    fprintf(f, "enemy_count_recruit=%d\n", game_eclvl_get(0));
-    fprintf(f, "enemy_count_veteran=%d\n", game_eclvl_get(1));
-    fprintf(f, "enemy_count_elite=%d\n", game_eclvl_get(2));
-    fprintf(f, "enemy_count_hero=%d\n", game_eclvl_get(3));
+    fprintf(f, "friends_mode=%d\n", game_friends_get());
+    hudhide_ini_write(f);
     fprintf(f, "rain=%d\n", game_rain_on_get());
     fprintf(f, "screen_rain=%d\n", recomp_screenfx_get(2));
     fprintf(f, "rain_amount=%d\n", game_rain_cfg_get(0));
@@ -261,6 +363,8 @@ static void rs_save_known(FILE *f)
     fprintf(f, "fps=%d\n", s_fps_list[s_fps]);
     fprintf(f, "res=%s\n", s_res ? s_res_list[s_res] : "");
     fprintf(f, "fullscreen=%d\n", s_full);
+    fprintf(f, "widescreen=%d\n", s_asp != 0);
+    fprintf(f, "aspect=%s\n", s_asp == s_asp_run && s_asp_env[0] ? s_asp_env : k_asp_names[s_asp]);
     fprintf(f, "split_pads=%d\n", s_split);
     fprintf(f, "sprint_speed=%.2f\n", mkb_get_sprint_speed());
     fprintf(f, "sprint_time=%.1f\n", mkb_get_sprint_time());
@@ -270,8 +374,13 @@ static void rs_save_known(FILE *f)
     fprintf(f, "fxaa=%d\n", g_gpu_fxaa);
     fprintf(f, "language=%s\n", s_lang_list[s_lang]);
     fprintf(f, "menu_lang=%s\n", s_mlang_list[s_mlang]);
+    if (s_win_user)
+        fprintf(f, "menu_rect=%d,%d,%d,%d\n", s_win_fx, s_win_fy, s_win_fw, s_win_fh);
     fprintf(f, "icons=%s\n", mkb_get_icon_mode() == 1 ? "pad" : mkb_get_icon_mode() == 2 ? "keyboard" : "auto");
-    fprintf(f, "icon_style=%s\n", mkb_get_icon_style() ? "ps" : "xbox");
+    {
+        static const char *const k_icon_style_ini[5] = { "xbox", "xbox360", "ps2", "ps4", "ps5" };
+        fprintf(f, "icon_style=%s\n", k_icon_style_ini[mkb_get_icon_style() % 5]);
+    }
     mkb_bindings_write(f);
 }
 
@@ -330,6 +439,8 @@ void rs_startup(void)
             s_has_super = atoi(line + 15) != 0;
         } else if (!strncmp(line, "blood=", 6)) {
             rs_putenv("RECOMP_BLOOD", line + 6);
+        } else if (!strncmp(line, "explosion_size=", 15)) {
+            rs_putenv("RECOMP_EXPLOSION_SIZE", line + 15);
         } else if (!strncmp(line, "blood_color=", 12)) {
             rs_putenv("RECOMP_BLOOD_COLOR", line + 12);
         } else if (!strncmp(line, "blood_hue=", 10)) {
@@ -344,12 +455,18 @@ void rs_startup(void)
             rs_putenv("RECOMP_KEEP_CORPSES", atoi(line + 13) > 0 ? "24" : "0");
             if (atoi(line + 13) > 0)
                 rs_putenv("RECOMP_KEEP_CORPSES_N", line + 13);
+        } else if (!strncmp(line, "corpse_60hz=", 12)) {
+            rs_putenv("RECOMP_CORPSE_60HZ", line + 12);
         } else if (!strncmp(line, "fps_counter=", 12)) {
             rs_putenv("RECOMP_FPS_COUNTER", line + 12);
         } else if (!strncmp(line, "screen_blood=", 13)) {
             rs_putenv("RECOMP_SCREEN_BLOOD", line + 13);
         } else if (!strncmp(line, "screen_dirt=", 12)) {
             rs_putenv("RECOMP_SCREEN_DIRT", line + 12);
+        } else if (!strncmp(line, "blood_stains=", 13)) {
+            rs_putenv("RECOMP_BLOOD_STAINS", line + 13);
+        } else if (!strncmp(line, "stain_nodes=", 12)) {
+            rs_putenv("RECOMP_STAIN_NODES", line + 12);
         } else if (!strncmp(line, "firecap=", 8)) {
             rs_putenv("RECOMP_FIRE_CAP", line + 8);
         } else if (!strncmp(line, "lod=", 4)) {
@@ -358,14 +475,71 @@ void rs_startup(void)
             rs_putenv("RECOMP_STAMINA_BAR", line + 12);
         } else if (!strncmp(line, "enemy_count=", 12)) {
             rs_putenv("RECOMP_ENEMY_COUNT", line + 12);
-        } else if (!strncmp(line, "enemy_count_recruit=", 20)) {
-            rs_putenv("RECOMP_EC_RECRUIT", line + 20);
-        } else if (!strncmp(line, "enemy_count_veteran=", 20)) {
-            rs_putenv("RECOMP_EC_VETERAN", line + 20);
-        } else if (!strncmp(line, "enemy_count_elite=", 18)) {
-            rs_putenv("RECOMP_EC_ELITE", line + 18);
-        } else if (!strncmp(line, "enemy_count_hero=", 17)) {
-            rs_putenv("RECOMP_EC_HERO", line + 17);
+        } else if (!strncmp(line, "menu_rect=", 10)) {
+            int x, y, w, h;
+            if (sscanf(line + 10, "%d,%d,%d,%d", &x, &y, &w, &h) == 4 && w >= 1500 && w <= 10000 && h >= 1500 && h <= 10000
+                && x >= 0 && y >= 0 && x + w <= 10050 && y + h <= 10050) {
+                s_win_fx = x; s_win_fy = y; s_win_fw = w; s_win_fh = h;
+                s_win_user = 1;
+            }
+        } else if (!strncmp(line, "enemy_count_", 12)) {
+            /* the per-difficulty switches were removed (Enemy count applies on every difficulty); old lines are ignored */
+        } else if (hudhide_ini_line(line)) {
+            /* hud_hide_<id>= (hud_hide.c) */
+        } else if (!strncmp(line, "friends_mode=", 13)) {
+            rs_putenv("RECOMP_FRIENDS", line + 13);
+        } else if (!strncmp(line, "damage_mode=", 12)) {
+            rs_putenv("RECOMP_DAMAGE_MODE", line + 12);
+        } else if (!strncmp(line, "hud_proportions=", 16)) {
+            /* the option was removed again; an old line is ignored */
+        } else if (!strncmp(line, "hit_marker=", 11)) {
+            rs_putenv("RECOMP_HIT_MARKER", line + 11);
+        } else if (!strncmp(line, "unlock_all=", 11)) {
+            rs_putenv("RECOMP_UNLOCK_ALL", line + 11);
+        } else if (!strncmp(line, "cheat_ammo=", 11)) {
+            rs_putenv("RECOMP_CHEAT_AMMO", line + 11);
+        } else if (!strncmp(line, "cheat_god=", 10)) {
+            rs_putenv("RECOMP_CHEAT_GOD", line + 10);
+        } else if (!strncmp(line, "cheat_noshock=", 14)) {
+            rs_putenv("RECOMP_CHEAT_NOSHOCK", line + 14);
+        } else if (!strncmp(line, "cheat_nohud=", 12)) {
+            rs_putenv("RECOMP_CHEAT_NOHUD", line + 12);
+        } else if (!strncmp(line, "wheel_up=", 9) || !strncmp(line, "wheel_down=", 11)) {
+            /* the wheel options were removed again (the wheel is Change weapon); an old line is ignored */
+        } else if (!strncmp(line, "grenade_macro=", 14)) {
+            rs_putenv("RECOMP_GRENADE_MACRO", line + 14);
+        } else if (!strncmp(line, "auto_switch=", 12)) {
+            rs_putenv("RECOMP_AUTO_SWITCH", line + 12);
+        } else if (!strncmp(line, "enemy_grenades=", 15)) {
+            rs_putenv("RECOMP_ENEMY_GRENADES", line + 15);
+        } else if (!strncmp(line, "pain_sounds=", 12)) {
+            rs_putenv("RECOMP_PAIN_SOUNDS", line + 12);
+        } else if (!strncmp(line, "audio_width=", 12)) {
+            rs_putenv("RECOMP_AUDIO_WIDTH", line + 12);
+        } else if (!strncmp(line, "pain_volume=", 12)) {
+            rs_putenv("RECOMP_PAIN_VOLUME", line + 12);
+        } else if (!strncmp(line, "breath_sounds=", 14)) {
+            rs_putenv("RECOMP_BREATH", line + 14);
+        } else if (!strncmp(line, "breath_volume=", 14)) {
+            rs_putenv("RECOMP_BREATH_VOLUME", line + 14);
+        } else if (!strncmp(line, "scope_sway=", 11)) {
+            rs_putenv("RECOMP_SCOPE_SWAY", line + 11);
+        } else if (!strncmp(line, "scope_sway_strength=", 20)) {
+            rs_putenv("RECOMP_SCOPE_SWAY_STRENGTH", line + 20);
+        } else if (!strncmp(line, "weapon_light=", 13)) {
+            rs_putenv("RECOMP_WEAPON_LIGHT", line + 13);
+        } else if (!strncmp(line, "gun_sway=", 9)) {
+            rs_putenv("RECOMP_GUN_SWAY", line + 9);
+        } else if (!strncmp(line, "gun_sway_strength=", 18)) {
+            rs_putenv("RECOMP_GUN_SWAY_STRENGTH", line + 18);
+        } else if (!strncmp(line, "freecam_world=", 14)) {
+            rs_putenv("RECOMP_FREECAM_WORLD", line + 14);
+        } else if (!strncmp(line, "freecam_speed=", 14)) {
+            rs_putenv("RECOMP_FREECAM_SPEED", line + 14);
+        } else if (!strncmp(line, "map_editor=", 11)) {
+            rs_putenv("RECOMP_EDITOR", line + 11);
+        } else if (!strncmp(line, "hide_crosshair=", 15)) {
+            rs_putenv("RECOMP_HIDE_CROSSHAIR", line + 15);
         } else if (!strncmp(line, "grenade_timer=", 14)) {
             rs_putenv("RECOMP_GRENADE_TIMER", line + 14);
         } else if (!strncmp(line, "rain=", 5)) {
@@ -408,6 +582,8 @@ void rs_startup(void)
             g_gpu_fxaa = atoi(line + 5) != 0;
         } else if (!strncmp(line, "widescreen=", 11)) {          /* written by the launcher; the ini wins over the environment */
             rs_putenv("RECOMP_WIDESCREEN", atoi(line + 11) ? "1" : "0");
+        } else if (!strncmp(line, "aspect=", 7)) {              /* ultrawide: "21:9", "2.37", "auto" or "16:9" (off); the ini wins */
+            rs_putenv("RECOMP_ASPECT", line + 7);
         } else if (!strncmp(line, "mkb=", 4)) {
             rs_putenv("RECOMP_MKB", atoi(line + 4) ? "1" : "0");
         } else if (!strncmp(line, "pin_game=", 9)) {
@@ -426,7 +602,7 @@ void rs_startup(void)
             { "RECOMP_FOV", "90" }, { "RECOMP_DRAW_MULT", "2" }, { "RECOMP_FOG_MULT", "2" },
             { "RECOMP_PIN_GAME", "2" }, { "RECOMP_SMALL_CAP", "2.5" }, { "RECOMP_SKIP_RT_WAIT", "1" },
             { "RECOMP_FLUSH_AHEAD", "2097152" }, { "RECOMP_PUSHBUF_KB", "2048" }, { "RECOMP_FOV_BLEND_MS", "160" },
-            { "RECOMP_WIDESCREEN", "1" }, { "RECOMP_MKB", "1" }, { "RECOMP_NO_RECOIL", "1" },
+            { "RECOMP_WIDESCREEN", "1" }, { "RECOMP_MKB", "1" }, { "RECOMP_NO_RECOIL", "0" },
             { "RECOMP_FULLSCREEN", "1" }, { "RECOMP_GPU_RES", "1920x1080" },
         };
         size_t di;
@@ -525,6 +701,27 @@ void rs_startup(void)
     s_fps_run = s_fps;
     s_res_run = s_res;
     s_full_run = s_full;
+    {   /* aspect ratio, from RECOMP_WIDESCREEN / RECOMP_ASPECT (the ini lines already went through rs_putenv) */
+        const char *ws = getenv("RECOMP_WIDESCREEN"), *as = getenv("RECOMP_ASPECT");
+        float a = 0.0f, w, h;
+        s_asp_env[0] = 0;
+        if (ws && *ws == '0')
+            s_asp = 0;
+        else if (as && !_stricmp(as, "auto"))
+            s_asp = 3;
+        else {
+            if (as && *as) {
+                if (sscanf(as, "%f:%f", &w, &h) == 2 && h > 0.0f)
+                    a = w / h;
+                else
+                    a = (float)atof(as);
+            }
+            s_asp = a < 1.8f ? 1 : 2;               /* any wider shape shows as 21:9 (a custom value is kept while the row is untouched) */
+            if (s_asp > 1 && as && strlen(as) < sizeof s_asp_env)
+                snprintf(s_asp_env, sizeof s_asp_env, "%s", as);
+        }
+        s_asp_run = s_asp;
+    }
     e = getenv("RECOMP_SPLIT_PADS");
     s_split = e && *e && *e != '0';
     s_split_run = s_split;
@@ -560,6 +757,8 @@ static void t_acc(char *o, size_t n)  { snprintf(o, n, "%s", game_super_accuracy
 static void a_acc(int d)              { (void)d; game_super_accuracy_set(!game_super_accuracy_get()); }
 static void t_blood(char *o, size_t n) { snprintf(o, n, "%s", game_blood_name(game_blood_get())); }
 static void a_blood(int d)            { game_blood_set((game_blood_get() + d + 4) % 4); }
+static void t_expsz(char *o, size_t n) { snprintf(o, n, "%s", game_expsize_name(game_expsize_get())); }
+static void a_expsz(int d)            { game_expsize_set((game_expsize_get() + d + 5) % 5); }
 static void t_bcol(char *o, size_t n) { snprintf(o, n, "%s", game_blood_color_name(game_blood_color_get())); }
 static void a_bcol(int d)             { game_blood_color_set((game_blood_color_get() + d + 4) % 4); }
 static int  blood_is_custom(void)     { return game_blood_color_get() == 3; }      /* 3 = Custom */
@@ -579,6 +778,8 @@ static void t_btime(char *o, size_t n)
         snprintf(o, n, "%g s", (double)s);
 }
 static void a_btime(int d)            { game_blood_time_set((game_blood_time_get() + d + 9) % 9); }
+static void t_c60(char *o, size_t n) { snprintf(o, n, "%s", game_corpse60_get() ? "On" : "Off"); }
+static void a_c60(int d)             { (void)d; game_corpse60_set(!game_corpse60_get()); }
 static const int k_keep[7] = { 0, 6, 10, 20, 30, 50, 100 };
 static void t_keep(char *o, size_t n)
 {
@@ -602,6 +803,26 @@ static void t_sblood(char *o, size_t n)
     snprintf(o, n, "%s", k_n[recomp_screenfx_get(0) & 3]);
 }
 static void a_sblood(int d)           { recomp_screenfx_set(0, (recomp_screenfx_get(0) + d + 4) % 4); }
+static void t_stain(char *o, size_t n)
+{
+    static const char *const k_n[4] = { "Off", "Low", "Normal", "High" };
+    snprintf(o, n, "%s", k_n[game_stain_get() & 3]);
+}
+static void a_stain(int d)            { game_stain_set((game_stain_get() + d + 4) % 4); }
+static const unsigned k_stnodes[7] = { 100, 320, 600, 1000, 1500, 3000, 5000 };
+static void t_stnodes(char *o, size_t n)
+{
+    snprintf(o, n, "%u", game_stain_nodes());
+}
+static void a_stnodes(int d)
+{
+    unsigned c = game_stain_nodes();
+    int i, best = 0;
+    for (i = 0; i < 7; i++)
+        if (k_stnodes[i] <= c)
+            best = i;
+    game_stain_nodes_set(k_stnodes[(best + d + 7) % 7]);
+}
 static void t_sdirt(char *o, size_t n)
 {
     static const char *const k_n[4] = { "Off", "Low", "Normal", "High" };
@@ -629,15 +850,109 @@ static void a_rain(int d)             { (void)d; game_rain_on_set(!game_rain_on_
 static int  rain_is_on(void)          { return game_rain_on_get(); }
 static void t_ecnt(char *o, size_t n)  { if (game_ec_get() <= 1) snprintf(o, n, "Off"); else snprintf(o, n, "x%d", game_ec_get()); }
 static void a_ecnt(int d)              { game_ec_set((game_ec_get() - 1 + d + 5) % 5 + 1); }
-static void t_ecl0(char *o, size_t n)  { snprintf(o, n, "%s", game_eclvl_get(0) ? "On" : "Off"); }
-static void a_ecl0(int d)              { (void)d; game_eclvl_set(0, !game_eclvl_get(0)); }
-static void t_ecl1(char *o, size_t n)  { snprintf(o, n, "%s", game_eclvl_get(1) ? "On" : "Off"); }
-static void a_ecl1(int d)              { (void)d; game_eclvl_set(1, !game_eclvl_get(1)); }
-static void t_ecl2(char *o, size_t n)  { snprintf(o, n, "%s", game_eclvl_get(2) ? "On" : "Off"); }
-static void a_ecl2(int d)              { (void)d; game_eclvl_set(2, !game_eclvl_get(2)); }
-static void t_ecl3(char *o, size_t n)  { snprintf(o, n, "%s", game_eclvl_get(3) ? "On" : "Off"); }
-static void a_ecl3(int d)              { (void)d; game_eclvl_set(3, !game_eclvl_get(3)); }
-static int  ecnt_is_on(void)           { return game_ec_get() > 1; }
+static void t_hh0(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(0) ? "Hide" : "Show"); }
+static void a_hh0(int d) { (void)d; hudhide_set(0, !hudhide_get(0)); }
+static void t_hh1(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(1) ? "Hide" : "Show"); }
+static void a_hh1(int d) { (void)d; hudhide_set(1, !hudhide_get(1)); }
+static void t_hh2(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(2) ? "Hide" : "Show"); }
+static void a_hh2(int d) { (void)d; hudhide_set(2, !hudhide_get(2)); }
+static void t_hh3(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(3) ? "Hide" : "Show"); }
+static void a_hh3(int d) { (void)d; hudhide_set(3, !hudhide_get(3)); }
+static void t_hh4(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(4) ? "Hide" : "Show"); }
+static void a_hh4(int d) { (void)d; hudhide_set(4, !hudhide_get(4)); }
+static void t_hh5(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(5) ? "Hide" : "Show"); }
+static void a_hh5(int d) { (void)d; hudhide_set(5, !hudhide_get(5)); }
+static void t_hh6(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(6) ? "Hide" : "Show"); }
+static void a_hh6(int d) { (void)d; hudhide_set(6, !hudhide_get(6)); }
+static void t_hh7(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(7) ? "Hide" : "Show"); }
+static void a_hh7(int d) { (void)d; hudhide_set(7, !hudhide_get(7)); }
+static void t_hh8(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(8) ? "Hide" : "Show"); }
+static void a_hh8(int d) { (void)d; hudhide_set(8, !hudhide_get(8)); }
+static void t_hh9(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(9) ? "Hide" : "Show"); }
+static void a_hh9(int d) { (void)d; hudhide_set(9, !hudhide_get(9)); }
+static void t_hh10(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(10) ? "Hide" : "Show"); }
+static void a_hh10(int d) { (void)d; hudhide_set(10, !hudhide_get(10)); }
+static void t_hh11(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(11) ? "Hide" : "Show"); }
+static void a_hh11(int d) { (void)d; hudhide_set(11, !hudhide_get(11)); }
+static void t_hh12(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(12) ? "Hide" : "Show"); }
+static void a_hh12(int d) { (void)d; hudhide_set(12, !hudhide_get(12)); }
+static void t_hh13(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(13) ? "Hide" : "Show"); }
+static void a_hh13(int d) { (void)d; hudhide_set(13, !hudhide_get(13)); }
+static void t_hh14(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(14) ? "Hide" : "Show"); }
+static void a_hh14(int d) { (void)d; hudhide_set(14, !hudhide_get(14)); }
+static void t_hh15(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(15) ? "Hide" : "Show"); }
+static void a_hh15(int d) { (void)d; hudhide_set(15, !hudhide_get(15)); }
+static void t_hh16(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(16) ? "Hide" : "Show"); }
+static void a_hh16(int d) { (void)d; hudhide_set(16, !hudhide_get(16)); }
+static void t_hh17(char *o, size_t n) { snprintf(o, n, "%s", hudhide_get(17) ? "Hide" : "Show"); }
+static void a_hh17(int d) { (void)d; hudhide_set(17, !hudhide_get(17)); }
+static void t_frnd(char *o, size_t n)  { snprintf(o, n, "%s", game_friends_get() == 1 ? "Tough" : game_friends_get() == 2 ? "Weak" : "Normal"); }
+static void a_frnd(int d)              { game_friends_set((game_friends_get() + d + 3) % 3); }
+static void t_dmg(char *o, size_t n)   { snprintf(o, n, "%s", game_dmgmode_get() ? "Low damage" : "Normal"); }
+static void a_dmg(int d)               { (void)d; game_dmgmode_set(!game_dmgmode_get()); }
+static void t_hmark(char *o, size_t n) { snprintf(o, n, "%s", game_hitmark_get() ? "On" : "Off"); }
+static void a_hmark(int d)             { (void)d; game_hitmark_set(!game_hitmark_get()); }
+static void t_unlock(char *o, size_t n) { snprintf(o, n, "%s", game_unlock_get() ? "On" : "Off"); }
+static void a_unlock(int d)            { (void)d; game_unlock_set(!game_unlock_get()); }
+static void t_cammo(char *o, size_t n) { snprintf(o, n, "%s", game_cheat_ammo_get() ? "On" : "Off"); }
+static void a_cammo(int d)             { (void)d; game_cheat_ammo_set(!game_cheat_ammo_get()); }
+static void t_cgod(char *o, size_t n)  { snprintf(o, n, "%s", game_cheat_god_get() ? "On" : "Off"); }
+static void a_cgod(int d)              { (void)d; game_cheat_god_set(!game_cheat_god_get()); }
+static void t_cshock(char *o, size_t n) { snprintf(o, n, "%s", game_cheat_noshock_get() ? "On" : "Off"); }
+static void a_cshock(int d)             { (void)d; game_cheat_noshock_set(!game_cheat_noshock_get()); }
+static void t_chud(char *o, size_t n)   { snprintf(o, n, "%s", game_cheat_nohud_get() ? "Hide" : "Show"); }
+static void a_chud(int d)               { (void)d; game_cheat_nohud_set(!game_cheat_nohud_get()); }
+static void t_crally(char *o, size_t n) { snprintf(o, n, "%s", "Press A / Enter"); }
+static void a_crally(int d)             { if (d > 0) game_cheat_rally_request(); }
+static void a_cnem(int d)               { if (d > 0) game_cheat_nemesis_request(); }
+static void t_autosw(char *o, size_t n)
+{
+    int m = game_autoswitch_get();
+    snprintf(o, n, "%s", m == 2 ? "Out of ammo" : m == 1 ? "Empty magazine" : "Off");
+}
+static void a_autosw(int d)            { game_autoswitch_set((game_autoswitch_get() + (d < 0 ? 2 : 1)) % 3); }
+static void t_egren(char *o, size_t n)
+{
+    static const char *k_n[4] = { "Off", "Low", "Medium", "High" };
+    snprintf(o, n, "%s", k_n[game_egren_get() & 3]);
+}
+static void a_egren(int d)             { game_egren_set((game_egren_get() + (d < 0 ? 3 : 1)) % 4); }
+static void t_gmac(char *o, size_t n)  { snprintf(o, n, "%s", mkb_gren_macro_get() ? "On" : "Off"); }
+static void a_gmac(int d)              { (void)d; mkb_gren_macro_set(!mkb_gren_macro_get()); }
+static void t_pain(char *o, size_t n)  { snprintf(o, n, "%s", game_pain_get() ? "On" : "Off"); }
+static void a_pain(int d)              { (void)d; game_pain_set(!game_pain_get()); }
+static int  pain_is_on(void)           { return game_pain_get(); }
+static void t_awidth(char *o, size_t n) { snprintf(o, n, "%s", apu_stereo_width_get() > 0 ? "Original" : "Mono"); }
+static void a_awidth(int d)            { (void)d; apu_stereo_width_set(apu_stereo_width_get() > 0 ? 0 : 100); }
+static void t_painv(char *o, size_t n) { snprintf(o, n, "%d%%", game_painvol_get()); }
+static void a_painv(int d)             { game_painvol_set(game_painvol_get() + 10 * d); }
+static void t_breath(char *o, size_t n) { snprintf(o, n, "%s", game_breath_get() ? "On" : "Off"); }
+static void a_breath(int d)            { (void)d; game_breath_set(!game_breath_get()); }
+static int  breath_is_on(void)         { return game_breath_get(); }
+static void t_breathv(char *o, size_t n) { snprintf(o, n, "%d%%", game_breathvol_get()); }
+static void a_breathv(int d)           { game_breathvol_set(game_breathvol_get() + 10 * d); }
+static void t_sway(char *o, size_t n)  { snprintf(o, n, "%s", game_sway_get() ? "On" : "Off"); }
+static void a_sway(int d)              { (void)d; game_sway_set(!game_sway_get()); }
+static int  sway_is_on(void)           { return game_sway_get(); }
+static void t_swayst(char *o, size_t n) { snprintf(o, n, "%d", game_swaystr_get()); }
+static void a_swayst(int d)            { game_swaystr_set(game_swaystr_get() + d); }
+static void t_wlight(char *o, size_t n) { static const char *nm[5] = { "Off", "Low", "Normal", "High", "Extreme" }; int v = game_weaponlight_get(); snprintf(o, n, "%s", nm[v < 0 ? 0 : v > 4 ? 4 : v]); }
+static void a_wlight(int d)            { game_weaponlight_set((game_weaponlight_get() + d + 5) % 5); }
+static void t_gsway(char *o, size_t n) { snprintf(o, n, "%s", game_gunsway_get() ? "On" : "Off"); }
+static void a_gsway(int d)             { (void)d; game_gunsway_set(!game_gunsway_get()); }
+static int  gsway_is_on(void)          { return game_gunsway_get(); }
+static void t_gswayst(char *o, size_t n) { snprintf(o, n, "%d", game_gunswaystr_get()); }
+static void a_gswayst(int d)           { game_gunswaystr_set(game_gunswaystr_get() + d); }
+static void t_fcam(char *o, size_t n)  { snprintf(o, n, "%s", game_freecam_get() ? "On" : "Off"); }
+static void a_fcam(int d)              { (void)d; game_freecam_set(!game_freecam_get()); }
+static void t_fcamw(char *o, size_t n) { snprintf(o, n, "%s", game_freecamworld_get() ? "Running" : "Frozen"); }
+static void a_fcamw(int d)             { (void)d; game_freecamworld_set(!game_freecamworld_get()); }
+static void t_fcams(char *o, size_t n) { snprintf(o, n, "%d", game_freecamspeed_get()); }
+static void a_fcams(int d)             { game_freecamspeed_set(game_freecamspeed_get() + d); }
+static void t_edit(char *o, size_t n)  { snprintf(o, n, "%s", game_editor_get() ? "On" : "Off"); }
+static void a_edit(int d)              { (void)d; game_editor_set(!game_editor_get()); }
+static void t_xhair(char *o, size_t n) { snprintf(o, n, "%s", texdec_crosshair_hide_get() ? "Hide" : "Show"); }
+static void a_xhair(int d)             { (void)d; texdec_crosshair_hide_set(!texdec_crosshair_hide_get()); }
 static void t_fpsc(char *o, size_t n) { snprintf(o, n, "%s", g_show_fps ? "On" : "Off"); }
 static void a_fpsc(int d)             { (void)d; g_show_fps = !g_show_fps; }
 static void t_sens(char *o, size_t n) { snprintf(o, n, "%.1f", mkb_get_sens()); }
@@ -654,6 +969,9 @@ static int  p_fps(void)               { return s_fps != s_fps_run; }
 static void t_res(char *o, size_t n)  { snprintf(o, n, "%s", s_res_list[s_res]); }
 static void a_res(int d)              { s_res = (s_res + d + s_res_n) % s_res_n; }
 static int  p_res(void)               { return s_res != s_res_run; }
+static void t_asp(char *o, size_t n)  { snprintf(o, n, "%s", k_asp_names[s_asp]); }
+static void a_asp(int d)              { s_asp = (s_asp + d + 4) % 4; }
+static int  p_asp(void)               { return s_asp != s_asp_run; }
 static void t_full(char *o, size_t n) { snprintf(o, n, "%s", s_full ? "On" : "Off"); }
 static void a_full(int d)             { (void)d; s_full = !s_full; }
 static int  p_full(void)              { return s_full != s_full_run; }
@@ -710,8 +1028,9 @@ static void t_icm(char *o, size_t n)
     snprintf(o, n, "%s", mkb_get_icon_mode() == 1 ? "Gamepad" : mkb_get_icon_mode() == 2 ? "Keyboard" : "Auto (last used)");
 }
 static void a_icm(int d)              { mkb_set_icon_mode((mkb_get_icon_mode() + d + 3) % 3); }
-static void t_ics(char *o, size_t n)  { snprintf(o, n, "%s", mkb_get_icon_style() ? "PlayStation" : "Xbox"); }
-static void a_ics(int d)              { (void)d; mkb_set_icon_style(!mkb_get_icon_style()); }
+static const char *const k_icon_style_name[5] = { "Xbox", "Xbox 360", "PS2 / PS3", "PS4", "PS5" };
+static void t_ics(char *o, size_t n)  { snprintf(o, n, "%s", k_icon_style_name[mkb_get_icon_style() % 5]); }
+static void a_ics(int d)              { mkb_set_icon_style((mkb_get_icon_style() + (d < 0 ? 4 : 1)) % 5); }
 
 static void t_mlang(char *o, size_t n);
 static void a_mlang(int d);
@@ -726,11 +1045,46 @@ static const RsRow k_rows[] = {
     { "Anisotropic filtering", "live",           t_aniso, a_aniso, NULL },
     { "FXAA anti-aliasing",  "live",             t_fxaa, a_fxaa, NULL   },
     { "Super Accuracy",      "applies in a mission", t_acc, a_acc, NULL },
-    { "Enemy count (heavy)", "experimental; applies at the next mission load; x2 to x5 times the enemies that spawn points create (max x5). Heavy: costs frames, keep it low on a slower PC", t_ecnt, a_ecnt, NULL },
-    { "Enemy count: Recruit", "extra enemies on this difficulty", t_ecl0, a_ecl0, NULL, ecnt_is_on, "set Enemy count first" },
-    { "Enemy count: Veteran", "extra enemies on this difficulty", t_ecl1, a_ecl1, NULL, ecnt_is_on, "set Enemy count first" },
-    { "Enemy count: Elite",   "extra enemies on this difficulty", t_ecl2, a_ecl2, NULL, ecnt_is_on, "set Enemy count first" },
-    { "Enemy count: Hero",    "extra enemies on this difficulty", t_ecl3, a_ecl3, NULL, ecnt_is_on, "set Enemy count first" },
+    { "Enemy count (heavy)", "applies at the next mission load; x2 to x5 times the enemies that spawn points create (max x5), on every difficulty. Heavy: costs frames, keep it low on a slower PC", t_ecnt, a_ecnt, NULL },
+    { "HUD: Compass", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh0, a_hh0, NULL },
+    { "HUD: Health ring", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh1, a_hh1, NULL },
+    { "HUD: Medkit count", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh2, a_hh2, NULL },
+    { "HUD: Revive icon", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh3, a_hh3, NULL },
+    { "HUD: Stance icon", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh4, a_hh4, NULL },
+    { "HUD: Ammo", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh5, a_hh5, NULL },
+    { "HUD: Grenades", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh6, a_hh6, NULL },
+    { "HUD: Adrenaline bar", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh7, a_hh7, NULL },
+    { "HUD: Overheat meter", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh8, a_hh8, NULL },
+    { "HUD: Stopwatch", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh9, a_hh9, NULL },
+    { "HUD: Demolition charge", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh10, a_hh10, NULL },
+    { "HUD: Damage direction", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh11, a_hh11, NULL },
+    { "HUD: Hint text", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh12, a_hh12, NULL },
+    { "HUD: Out of ammo text", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh13, a_hh13, NULL },
+    { "HUD: Squad commands", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh14, a_hh14, NULL },
+    { "HUD: Nemesis card", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh15, a_hh15, NULL },
+    { "HUD: Mission timer text", "applies at the next mission load (restart the game if nothing changes); Hide moves this part of the HUD off the screen", t_hh16, a_hh16, NULL },
+    { "HUD: Compass markers", "live; hides the orange / blue / green arrows (objectives and squad mates) that the compass draws", t_hh17, a_hh17, NULL },
+    { "Squad mates",         "live; Normal = the game's own. Tough: squad mates hit 3 times harder. Weak: they hit less than half as hard and miss more (wider aim error)", t_frnd, a_frnd, NULL },
+    { "Damage mode",         "Normal: the game's own damage, and a Damage line in mods\\weapons works. Low damage: 7 hits (head 3); heavy guns 1 head / 2 body; the mods\\weapons Damage line is IGNORED. Live", t_dmg, a_dmg, NULL },
+    { "Hit marker",          "live; a white X at the centre when you hit an enemy, a red X when you kill him", t_hmark, a_hmark, NULL },
+    { "Enemy grenades", "live; enemies that are shooting at you throw a grenade from time to time: Low about every 20 s, Medium 12 s, High 7 s, at most one in the air. No throw animation, the grenade appears at the soldier's hand", t_egren, a_egren, NULL },
+    { "Auto switch weapon",  "live; Empty magazine = the other weapon comes up when the magazine runs empty, instead of the reload. Out of ammo = only when the weapon has no rounds left at all (magazine and reserve)", t_autosw, a_autosw, NULL },
+    { "Stereo sound",        "live; Original = the game's own mix: a sound at your side plays in one ear only, the other ear is silent (on some headphones it seems to vanish). Mono = both ears get the same sound, so nothing vanishes, but left / right / behind can no longer be told apart", t_awidth, a_awidth, NULL },
+    { "Pain sounds",         "live; a pain sound when a soldier or you are hit, a scream when a soldier dies. Needs your WAV files in the mods folder, sounds, pain (see README there)", t_pain, a_pain, NULL },
+    { "Pain volume",         "live; how loud the pain sounds are", t_painv, a_painv, NULL, pain_is_on, "turn Pain sounds on first" },
+    { "Breathing sound",     "live; the player breathes after a moment of sprinting and while worn out. Uses the WAV files in the mods folder, sounds, breath", t_breath, a_breath, NULL },
+    { "Breathing volume",    "live; how loud the breathing is", t_breathv, a_breathv, NULL, breath_is_on, "turn Breathing sound on first" },
+    { "Scope sway",          "live; in a scope the aim moves in a slow wave while your health is low (red)", t_sway, a_sway, NULL },
+    { "Scope sway strength", "live; 1 = faint, 5 = strong", t_swayst, a_swayst, NULL, sway_is_on, "turn Scope sway on first" },
+    { "Weapon lighting",     "live; the weapon you hold reflects the light around you (a street lamp's colour, the sky), shows dust after explosions, blood after close hits and drops in the rain", t_wlight, a_wlight, NULL },
+    { "Gun sway",            "live; the weapon has weight: it lags behind when you turn the camera and catches up with a small swing", t_gsway, a_gsway, NULL },
+    { "Gun sway strength",   "live; 1 = light and quick, 5 = heavy and slow", t_gswayst, a_gswayst, NULL, gsway_is_on, "turn Gun sway on first" },
+    { "Freecam",             "live, in a mission; the camera flies free of your soldier (also the Insert key). WASD fly along the view, mouse turns, Space up, C down, Shift fast, Ctrl slow. Pad: left stick fly, right stick turn, triggers up / down. The weapon is hidden", t_fcam, a_fcam, NULL },
+    { "Freecam world",       "live; Frozen = enemies, physics and scripts stand still while you fly. Running = the game goes on around you", t_fcamw, a_fcamw, NULL },
+    { "Freecam speed",       "live; 1 = slow, 5 = very fast (Shift makes it 4x faster)", t_fcams, a_fcams, NULL },
+    { "Map editor",          "live, with the free camera on: Numpad 2 puts an enemy soldier 6 steps in front of the camera, Numpad 3 a friendly one, Numpad 7 takes the last one back, Numpad 4 kills the soldier in the crosshair, Numpad 6 clears the saved list. Placements are saved per mission in mods\\maps and come back by themselves when the mission starts", t_edit, a_edit, NULL },
+    { "Game crosshair",      "live; Hide removes the game's own aiming mark (the scope's stays)", t_xhair, a_xhair, NULL },
+    { "Explosion size",      "live; grenades, rockets, tank shells, barrels get a bigger fireball, smoke and debris. The blast damage is not changed", t_expsz, a_expsz, NULL },
     { "Blood amount",        "applies in a mission", t_blood, a_blood, NULL },
     { "Blood colour",        "applies in a mission", t_bcol, a_bcol, NULL },
     { "Blood hue",           "applies in a mission", t_bhue, a_bhue, NULL, blood_is_custom, "choose Custom first", sw_blood },
@@ -738,7 +1092,10 @@ static const RsRow k_rows[] = {
     { "Blood brightness",    "applies in a mission", t_bbri, a_bbri, NULL, blood_is_custom, "choose Custom first", sw_blood },
     { "Blood duration",      "seconds the spray stays; Auto = by amount", t_btime, a_btime, NULL },
     { "Keep corpses (experimental)", "bodies that stay on the ground", t_keep, a_keep, NULL },
-    { "Screen blood",        "splatters on your view when an enemy is hit close", t_sblood, a_sblood, NULL },
+    { "Corpse fix (60 Hz physics)", "live; On stops dead bodies flying into the air at high frame rates, but it can freeze or crash the game. Off: bodies may fly, no freeze", t_c60, a_c60, NULL },
+    { "Screen blood",       "splatters on your view when an enemy is hit close", t_sblood, a_sblood, NULL },
+    { "Blood stains",        "live; blood on walls and floor when a soldier is hit, when one dies and when you are hurt. Low = deaths only", t_stain, a_stain, NULL },
+    { "Stain limit",         "how many blood stains and bullet holes stay on the walls and floor before the oldest start to vanish (the game itself keeps 100). More = longer-lasting blood but a little less speed when it fills up. Applies at the next level load", t_stnodes, a_stnodes, game_stain_nodes_pending },
     { "Screen dirt",         "dust and dirt on your view when an explosion is near", t_sdirt, a_sdirt, NULL },
     { "Rain",                "the game's own rain; Off = none, and the rows below are greyed out", t_rain, a_rain, NULL, NULL },
     { "Screen rain",         "raindrops on your view while you are out in the rain", t_srain, a_srain, NULL, rain_is_on, "turn Rain on first" },
@@ -753,6 +1110,7 @@ static const RsRow k_rows[] = {
     { "Replaced textures",    "live: On shows your pictures, Off the game's own", t_tmod, a_tmod, NULL },
     { "Dump sounds (WAV)",     "restart; saves sound effects to sound_dump", t_sdump, a_sdump, p_sdump },
     { "Controls",            "keyboard, mouse and gamepad", t_ctl, a_ctl, NULL },
+    { "Grenade macro",       "live; On: hold the grenade key (4 / Up arrow, or the pad's D-pad up) to take the grenade out and pull the pin, release it to throw; your weapon then comes back by itself. Off: the grenade key works as before", t_gmac, a_gmac, NULL },
     { "Button prompts",      "which device the icons follow", t_icm, a_icm, NULL },
     { "Gamepad icons",       "Xbox or PlayStation art", t_ics, a_ics, NULL },
     { "Sprint speed",        "live",             t_spd,  a_spd,  NULL   },
@@ -763,11 +1121,86 @@ static const RsRow k_rows[] = {
     { "Language",            "restart; packs in the languages folder", t_lang, a_lang, p_lang },
     { "Frame rate",          "restart",          t_fps,  a_fps,  p_fps  },
     { "Resolution",          "restart",          t_res,  a_res,  p_res  },
+    { "Aspect ratio",        "restart; 4:3 and 16:9 are the game's own shapes. 21:9 widens the view (the HUD stays in 16:9 shape at the screen edges, menus stay 16:9). Auto follows your window or monitor. With a 16:9 resolution the width is made to fit", t_asp, a_asp, p_asp },
     { "Fullscreen",          "restart",          t_full, a_full, p_full },
     { "Split-screen pads",   "restart; keyboard and mouse = player 1, each gamepad = the next player", t_split, a_split, p_split },
+    /* the cheats group: the game's own cheat codes go here, after this one */
+    { "Cheats: Unlock all missions", "live; every mission can be picked in Mission Select (your save is not changed). Open Mission Select again after turning it on", t_unlock, a_unlock, NULL },
+    { "Cheats: Unlimited ammo", "live; the game's own cheat: your weapons never run out of ammo (single player)", t_cammo, a_cammo, NULL },
+    { "Cheats: Invincible",  "live; the game's own cheat: you cannot be killed (single player)", t_cgod, a_cgod, NULL },
+    { "Cheats: Full adrenaline meter", "in a mission, single player: press to fill the adrenaline meter at once (the game's own cheat; its message says Rally Bar Filled)", t_crally, a_crally, NULL },
+    { "Cheats: Kill nemesis", "in a mission, single player: press to kill the nemesis (the boss you have to hunt down) at once (the game's own cheat)", t_crally, a_cnem, NULL },
+    { "Cheats: Disable shellshock", "live; the game's own cheat: no shellshock (the deafness and blur after a nearby explosion)", t_cshock, a_cshock, NULL },
+    { "HUD: Whole HUD", "live; the game's own Disable HUD cheat: Hide switches the whole HUD off at once, Show brings it back", t_chud, a_chud, NULL },
     { "Apply and restart",   "restarts the game", t_apply, a_apply, p_any },
 };
 #define RS_ROWS ((int)(sizeof k_rows / sizeof k_rows[0]))
+
+/* ---- the categories ---------------------------------------------------------------
+ * The first screen lists the categories (and "Apply and restart" at the end); a category shows its own rows. The rows
+ * stay in k_rows above; this table says which row belongs where, by name ("HUD: *" = every row starting with "HUD: ").
+ * A row that is in no category falls into the last one, so nothing is lost when a row is added. */
+#define RS_NCAT 9
+#define RS_CATMAX 40
+static const struct { const char *name; const char *rows[RS_CATMAX]; } k_cat_def[RS_NCAT] = {
+    { "Video", { "Field of view", "Draw distance", "Model detail", "Fog distance", "Anisotropic filtering",
+                 "FXAA anti-aliasing", "Frame rate", "Resolution", "Aspect ratio", "Fullscreen", "FPS counter", NULL } },
+    { "Gameplay", { "Automatic fire speed", "Auto switch weapon", "Damage mode",
+                    "Enemy grenades", "Enemy count (heavy)", "Sprint speed", "Sprint duration", "Rest to recover", "Gun sway",
+                    "Gun sway strength", "Scope sway", "Scope sway strength", NULL } },
+    { "HUD", { "HUD: *", "Hit marker", "Game crosshair", "Grenade timer", "Stamina bar", NULL } },
+    { "Effects", { "Weapon lighting", "Explosion size", "Blood amount", "Blood colour", "Blood hue", "Blood saturation", "Blood brightness",
+                   "Blood duration", "Keep corpses (experimental)", "Corpse fix (60 Hz physics)", "Screen blood", "Blood stains", "Stain limit", "Screen dirt", "Rain", "Screen rain",
+                   "Rain amount", "Rain size", "Rain speed", NULL } },
+    { "Audio", { "Stereo sound", "Pain sounds", "Pain volume", "Breathing sound", "Breathing volume", NULL } },
+    { "Controls", { "Controls", "Button prompts", "Gamepad icons", "Mouse sensitivity", "Invert mouse Y",
+                    "Grenade macro", "Split-screen pads", NULL } },
+    { "Mods and tools", { "Freecam", "Freecam world", "Freecam speed", "Map editor", "Replaced textures", "Dump textures", "Dump sounds (WAV)", NULL } },
+    { "Cheats", { "Cheats: *", "Super Accuracy", "Squad mates", NULL } },
+    { "General", { "Menu language", "Language", "Cutscenes", NULL } },
+};
+static int s_cat_idx[RS_NCAT][RS_CATMAX], s_cat_n[RS_NCAT];
+static int s_cat_built, s_apply_row = -1;
+static int s_cat = -1;               /* the open category, -1 = the list of categories */
+static int s_cat_back;               /* the list's selection while a category is open */
+
+static void a_apply(int d);
+static void rs_build_cats(void)
+{
+    int placed[RS_ROWS], c, i, k;
+    if (s_cat_built)
+        return;
+    s_cat_built = 1;
+    memset(placed, 0, sizeof placed);
+    for (i = 0; i < RS_ROWS; i++)
+        if (k_rows[i].adj == a_apply)
+            s_apply_row = i;
+    for (c = 0; c < RS_NCAT; c++) {
+        s_cat_n[c] = 0;
+        for (k = 0; k_cat_def[c].rows[k]; k++) {
+            const char *nm = k_cat_def[c].rows[k];
+            size_t L = strlen(nm);
+            int star = L && nm[L - 1] == '*';
+            for (i = 0; i < RS_ROWS; i++) {
+                int hit = star ? !strncmp(k_rows[i].name, nm, L - 1) : !strcmp(k_rows[i].name, nm);
+                if (hit && !placed[i] && i != s_apply_row && s_cat_n[c] < RS_CATMAX) {
+                    placed[i] = 1;
+                    s_cat_idx[c][s_cat_n[c]++] = i;
+                    if (!star)
+                        break;
+                }
+            }
+        }
+    }
+    for (i = 0; i < RS_ROWS; i++)
+        if (!placed[i] && i != s_apply_row && s_cat_n[RS_NCAT - 1] < RS_CATMAX) {
+            s_cat_idx[RS_NCAT - 1][s_cat_n[RS_NCAT - 1]++] = i;
+            fprintf(stderr, "[SETTINGS] row '%s' is in no category, put under General\n", k_rows[i].name);
+        }
+}
+
+static int rs_n(void)                { rs_build_cats(); return s_cat < 0 ? RS_NCAT + 1 : s_cat_n[s_cat]; }
+static const RsRow *rs_rowp(int i)   { return &k_rows[s_cat_idx[s_cat][i]]; }
 
 /* ---- the window ----------------------------------------------------------- */
 
@@ -804,6 +1237,10 @@ static void rs_restart_game(void)
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
         fflush(stderr);
+        {
+            extern void diag_clean_exit(void);
+            diag_clean_exit();      /* a restart is a clean end: the new run must not see a crash flag */
+        }
         TerminateProcess(GetCurrentProcess(), 0);   /* ExitProcess could wait on a thread holding the log lock */
     }
 }
@@ -815,23 +1252,53 @@ static void a_apply(int d)
         rs_restart_game();
 }
 
+/* the list of categories: Enter / A / a click opens one (or restarts the game on the last entry) */
+static void rs_open_cat(int c)
+{
+    if (c < 0 || c >= RS_NCAT || !s_cat_n[c])
+        return;
+    s_cat_back = s_sel;
+    s_cat = c;
+    s_sel = 0;
+    s_top = 0;
+    InvalidateRect(s_hwnd, NULL, FALSE);
+}
+
 static void rs_change(int dir)
 {
-    if (k_rows[s_sel].enabled && !k_rows[s_sel].enabled())
+    const RsRow *r;
+    if (s_cat < 0) {
+        if (s_sel < RS_NCAT)
+            rs_open_cat(s_sel);
+        else if (s_apply_row >= 0)
+            k_rows[s_apply_row].adj(1);
+        return;
+    }
+    r = rs_rowp(s_sel);
+    if (r->enabled && !r->enabled())
         return;                         /* greyed out (Rain is Off): nothing to change */
-    k_rows[s_sel].adj(dir);
+    r->adj(dir);
     rs_save();
     InvalidateRect(s_hwnd, NULL, FALSE);
 }
 
-static void rs_select(int d)
+static void rs_select_to(int s)
 {
-    s_sel = (s_sel + d + RS_ROWS) % RS_ROWS;
+    int n = rs_n();
+    if (s < 0) s = 0;
+    if (s > n - 1) s = n - 1;
+    s_sel = s;
     if (s_sel < s_top)
         s_top = s_sel;
     if (s_sel >= s_top + RS_VIS)
         s_top = s_sel - RS_VIS + 1;
     InvalidateRect(s_hwnd, NULL, FALSE);
+}
+
+static void rs_select(int d)
+{
+    int n = rs_n();
+    rs_select_to((s_sel + d + n) % n);
 }
 
 static HFONT rs_font(int h, int weight)
@@ -1053,7 +1520,7 @@ static void ct_assign_key(unsigned code)
 {
     int r = s_csel, n, i;
     unsigned short ks[4];
-    if (code == VK_F12 || code == VK_F1 || code == VK_F11 || code == VK_F9) {     /* screenshot / Recomp Settings / fullscreen / textures keys */
+    if (code == VK_F12 || code == VK_F1 || code == VK_F2 || code == VK_F11 || code == VK_F9) {     /* screenshot / Recomp Settings / report / fullscreen / textures keys */
         s_cap = 0;
         InvalidateRect(s_hwnd, NULL, FALSE);
         return;
@@ -1122,7 +1589,7 @@ static void rs_nav(int dir)
     if (s_page == 0) {
         if (dir == 1) rs_select(-1);
         else if (dir == 2) rs_select(1);
-        else rs_change(dir == 3 ? -1 : 1);
+        else if (s_cat >= 0 || dir == 4) rs_change(dir == 3 ? -1 : 1);    /* the list of categories: Right opens, Left does nothing */
     } else if (dir <= 2) {
         ct_select(dir == 1 ? -1 : 1);
     } else {
@@ -1149,8 +1616,31 @@ static void rs_back(void)
     } else if (s_page == 1) {
         s_page = 0;
         InvalidateRect(s_hwnd, NULL, FALSE);
+    } else if (s_cat >= 0) {                    /* back from a category to the list of categories */
+        s_cat = -1;
+        s_sel = s_cat_back;
+        s_top = s_sel >= RS_VIS ? s_sel - RS_VIS + 1 : 0;
+        InvalidateRect(s_hwnd, NULL, FALSE);
     } else {
         PostMessage(s_hwnd, WM_CLOSE, 0, 0);
+    }
+}
+
+/* the mouse wheel: one row up or down, no wrapping (the pages with rows) */
+static void rs_wheel(int up)
+{
+    if (s_page == 0) {
+        rs_select_to(s_sel + (up ? -1 : 1));
+    } else {
+        int s = s_csel + (up ? -1 : 1);
+        if (s < 0) s = 0;
+        if (s > CT_ROWS - 1) s = CT_ROWS - 1;
+        s_csel = s;
+        if (s_csel < s_ctop)
+            s_ctop = s_csel;
+        if (s_csel >= s_ctop + RS_VIS)
+            s_ctop = s_csel - RS_VIS + 1;
+        InvalidateRect(s_hwnd, NULL, FALSE);
     }
 }
 
@@ -1211,6 +1701,22 @@ static void rs_drag_to(int y)
     InvalidateRect(s_hwnd, NULL, FALSE);
 }
 
+/* The restart button in the red band, on every page: a player who changed something never has to walk back to the
+ * top. The first click arms it (so a stray click in a mission does not end the game), the second one restarts. */
+static RECT  s_rst_rc;
+static DWORD s_rst_arm;              /* tick of the first click, 0 = not armed */
+
+static void rs_paint_restart(HDC mem, int W, int H, HFONT fsmall)
+{
+    HFONT old = (HFONT)SelectObject(mem, fsmall);
+    int armed = s_rst_arm && GetTickCount() - s_rst_arm < 3000u;
+    s_rst_rc.left = W / 2; s_rst_rc.right = W - W / 12;
+    s_rst_rc.top = H / 20 + 3; s_rst_rc.bottom = H / 20 + H / 20 + 3;
+    rs_text(mem, armed ? "[ Click again to restart ]" : "[ Restart game ]", &s_rst_rc, DT_RIGHT | DT_VCENTER,
+            armed ? RGB(255, 235, 150) : p_any() ? RGB(255, 205, 90) : RGB(240, 215, 200));
+    SelectObject(mem, old);
+}
+
 static void rs_paint_controls(HDC mem, int W, int H, HFONT fbig, HFONT fnorm, HFONT fsmall)
 {
     RECT bar = { 0, H / 20, W, H / 20 + H / 9 }, tx, hd;
@@ -1224,6 +1730,7 @@ static void rs_paint_controls(HDC mem, int W, int H, HFONT fbig, HFONT fnorm, HF
     tx.left = xl; tx.right = W; tx.top = bar.top; tx.bottom = bar.bottom;
     SelectObject(mem, fbig);
     rs_text(mem, "CONTROLS", &tx, DT_LEFT | DT_VCENTER, RGB(240, 232, 215));
+    rs_paint_restart(mem, W, H, fsmall);
 
     xk = xl + (xr - xl) * 36 / 100;
     xp = xl + (xr - xl) * 69 / 100;
@@ -1312,7 +1819,7 @@ static void rs_paint(HWND hw)
     HDC dc = BeginPaint(hw, &ps), mem;
     HBITMAP bmp, old;
     RECT cl;
-    int W, H, i, rowh, y0, fh;
+    int W, H, i, rowh, y0, fh, nrows;
     HFONT fbig, fnorm, fsmall, fo;
     HBRUSH br;
     char buf[64];
@@ -1348,17 +1855,27 @@ static void rs_paint(HWND hw)
         DeleteObject(br);
         tx.left = W / 12; tx.right = W; tx.top = bar.top; tx.bottom = bar.bottom;
         SelectObject(mem, fbig);
-        rs_text(mem, "RECOMP SETTINGS", &tx, DT_LEFT | DT_VCENTER, RGB(240, 232, 215));
+        rs_text(mem, s_cat < 0 ? "RECOMP SETTINGS" : k_cat_def[s_cat].name, &tx, DT_LEFT | DT_VCENTER, RGB(240, 232, 215));
+        rs_paint_restart(mem, W, H, fsmall);
+        if (s_win_mode) {                          /* how the window is handled */
+            RECT hn = bar;
+            hn.top = bar.bottom - H / 22; hn.right = W - W / 40;
+            SelectObject(mem, fsmall);
+            rs_text(mem, "drag this bar to move, drag the edges to resize", &hn, DT_RIGHT | DT_VCENTER, RGB(225, 170, 150));
+        }
     }
 
     y0 = H * 28 / 100;
     rowh = H * 62 / 100 / RS_VIS;
     memset(s_row_rc, 0, sizeof s_row_rc);
-    for (i = s_top; i < RS_ROWS && i < s_top + RS_VIS; i++) {
+    nrows = rs_n();
+    for (i = s_top; i < nrows && i < s_top + RS_VIS; i++) {
         RECT row = { W / 12, y0 + (i - s_top) * rowh, W - W / 12, y0 + (i - s_top + 1) * rowh - 4 };
         RECT lab, val, tag;
-        int pend = k_rows[i].pending && k_rows[i].pending();
-        int off = k_rows[i].enabled && !k_rows[i].enabled();     /* greyed out: shown, not changeable */
+        const RsRow *R = s_cat < 0 ? &k_rows[s_apply_row] : rs_rowp(i);   /* the last entry of the list is Apply and restart */
+        int is_cat = s_cat < 0 && i < RS_NCAT;
+        int pend = !is_cat && R->pending && R->pending();
+        int off = !is_cat && R->enabled && !R->enabled();        /* greyed out: shown, not changeable */
         s_row_rc[i] = row;
         if (i == s_sel) {
             RECT stripe = { row.left, row.top, row.left + 6, row.bottom };
@@ -1372,10 +1889,10 @@ static void rs_paint(HWND hw)
         lab = row; lab.left += 24; lab.right = row.left + (row.right - row.left) * 40 / 100;
         val = row; val.left = row.left + (row.right - row.left) * 40 / 100; val.right = row.left + (row.right - row.left) * 72 / 100;
         tag = row; tag.left = val.right + 12;
-        if (k_rows[i].swatch) {       /* the colour square beside the value; dimmed while the row is greyed out */
+        if (!is_cat && R->swatch) {   /* the colour square beside the value; dimmed while the row is greyed out */
             int sw_rgb[3], sz = (row.bottom - row.top) * 55 / 100;
             RECT sq, edge;
-            k_rows[i].swatch(sw_rgb);
+            R->swatch(sw_rgb);
             sq.left = val.right + 12; sq.right = sq.left + sz;
             sq.top = row.top + (row.bottom - row.top - sz) / 2; sq.bottom = sq.top + sz;
             edge = sq;
@@ -1389,35 +1906,48 @@ static void rs_paint(HWND hw)
             tag.left = edge.right + 10;
         }
         SelectObject(mem, fnorm);
-        rs_text(mem, k_rows[i].name, &lab, DT_LEFT | DT_VCENTER,
+        if (is_cat) {                 /* the list of categories: a name, how many rows it holds, an arrow */
+            RECT whole = row;
+            whole.left += 24;
+            rs_text(mem, k_cat_def[i].name, &whole, DT_LEFT | DT_VCENTER,
+                    i == s_sel ? RGB(255, 245, 225) : RGB(205, 200, 188));
+            snprintf(buf, sizeof buf, "%d", s_cat_n[i]);
+            tag = row; tag.right -= 20;
+            SelectObject(mem, fsmall);
+            rs_text(mem, buf, &tag, DT_RIGHT | DT_VCENTER, RGB(120, 118, 108));
+            SelectObject(mem, fnorm);
+            continue;
+        }
+        rs_text(mem, R->name, &lab, DT_LEFT | DT_VCENTER,
                 off ? RGB(105, 103, 96) : i == s_sel ? RGB(255, 245, 225) : RGB(205, 200, 188));
-        k_rows[i].text(buf, sizeof buf);
+        R->text(buf, sizeof buf);
         rs_text(mem, buf, &val, DT_CENTER | DT_VCENTER,
                 off ? RGB(105, 103, 96) : i == s_sel ? RGB(255, 245, 225) : RGB(225, 220, 205));
-        if (i == s_sel && !off) {
+        if (i == s_sel && !off && R->adj != a_apply) {
             RECT l = val, r = val;
             rs_text(mem, s_rtl ? ">" : "<", &l, DT_LEFT | DT_VCENTER, RGB(230, 90, 70));   /* mirrored: the left cell is drawn on the right */
             rs_text(mem, s_rtl ? "<" : ">", &r, DT_RIGHT | DT_VCENTER, RGB(230, 90, 70));
         }
         SelectObject(mem, fsmall);
-        rs_text(mem, off && k_rows[i].off ? k_rows[i].off : pend && k_rows[i].adj != a_apply ? (k_rows[i].adj == a_ramount ? "next level load" : "restart to apply") : k_rows[i].tag, &tag, DT_LEFT | DT_VCENTER,
+        rs_text(mem, off && R->off ? R->off : pend && R->adj != a_apply ? (R->adj == a_ramount ? "next level load" : "restart to apply") : R->tag, &tag, DT_LEFT | DT_VCENTER,
                 pend && !off ? RGB(230, 175, 60) : RGB(120, 118, 108));
     }
 
-    rs_scrollbar(mem, W - W / 12 + 12, y0, RS_VIS * rowh - 4, RS_ROWS, s_top);
+    rs_scrollbar(mem, W - W / 12 + 12, y0, RS_VIS * rowh - 4, nrows, s_top);
     {   /* footer */
         RECT ft = { W / 12, H * 92 / 100, W - W / 12, H };
         SelectObject(mem, fsmall);
         s_back_rc.left = W - W / 12 - W / 7; s_back_rc.right = W - W / 12;
         s_back_rc.top = ft.top - 6; s_back_rc.bottom = H * 98 / 100;
-        rs_text(mem, "Up / Down  select      Left / Right  change      B / Esc  back", &ft,
+        rs_text(mem, s_cat < 0 ? "Up / Down / wheel  select      Enter / click  open      B / Esc  close"
+                               : "Up / Down / wheel  select      Left / Right  change      B / Esc  back", &ft,
                 DT_LEFT | DT_TOP, RGB(150, 146, 134));
         rs_text(mem, "[ Back ]", &s_back_rc, DT_RIGHT | DT_TOP, RGB(225, 100, 80));
         if (s_top > 0) {
             RECT up = { W / 12, y0 - rowh * 2 / 3, W - W / 12, y0 };
             rs_text(mem, "^ more above", &up, DT_RIGHT | DT_VCENTER, RGB(150, 146, 134));
         }
-        if (s_top + RS_VIS < RS_ROWS) {
+        if (s_top + RS_VIS < nrows) {
             RECT dn = { W / 12, y0 + RS_VIS * rowh - 2, W - W / 12, y0 + RS_VIS * rowh + rowh * 2 / 3 };
             rs_text(mem, "v more below", &dn, DT_RIGHT | DT_VCENTER, RGB(150, 146, 134));
         }
@@ -1553,10 +2083,102 @@ static void rs_target(int gx, int gy, int gw, int gh, RECT *r)
 {
     int ww = s_win_mode ? gw * 62 / 100 : gw, wh = s_win_mode ? gh * 78 / 100 : gh;
 
+    if (s_win_mode && s_win_user) {                 /* where the player left it */
+        r->left = gx + (int)((long long)gw * s_win_fx / 10000);
+        r->top = gy + (int)((long long)gh * s_win_fy / 10000);
+        r->right = r->left + (int)((long long)gw * s_win_fw / 10000);
+        r->bottom = r->top + (int)((long long)gh * s_win_fh / 10000);
+        return;
+    }
     r->left = gx + (gw - ww) / 2;
     r->top = gy + (gh - wh) / 2;
     r->right = r->left + ww;
     r->bottom = r->top + wh;
+}
+
+/* ---- F1 window: move by the red bar, resize by the edges ---------------------------
+ * Done by hand (capture + SetWindowPos) so the popup needs no system frame. The place is kept as fractions of the
+ * game picture (menu_rect in the ini), so it survives a change of resolution or window size. */
+#define RS_EDGE 8
+static int   s_wdrag;                /* 0 none; else the grabbed parts: 1 left, 2 right, 4 top, 8 bottom, 16 the bar (move) */
+static POINT s_wd_c;                 /* the cursor when the grab started */
+static RECT  s_wd_r;                 /* the window then */
+
+static void rs_game_rect(RECT *g)
+{
+    HWND game = FindWindowA("XboxRecompFramebuffer", NULL);
+    RECT cl;
+    POINT tl = { 0, 0 };
+    if (game) {
+        GetClientRect(game, &cl);
+        ClientToScreen(game, &tl);
+        g->left = tl.x; g->top = tl.y; g->right = tl.x + cl.right; g->bottom = tl.y + cl.bottom;
+    } else {
+        g->left = 0; g->top = 0; g->right = GetSystemMetrics(SM_CXSCREEN); g->bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+}
+
+static int rs_win_hit(HWND hw, int x, int y)
+{
+    RECT cl;
+    int m = 0;
+    if (!s_win_mode)
+        return 0;
+    GetClientRect(hw, &cl);
+    if (x < RS_EDGE) m |= 1;
+    if (x >= cl.right - RS_EDGE) m |= 2;
+    if (y < RS_EDGE) m |= 4;
+    if (y >= cl.bottom - RS_EDGE) m |= 8;
+    if (!m && s_page == 0 && y >= cl.bottom / 20 && y < cl.bottom / 20 + cl.bottom / 9)
+        m = 16;
+    return m;
+}
+
+static void rs_win_drag(HWND hw)
+{
+    POINT c;
+    RECT r = s_wd_r, g;
+    int dx, dy, gw, gh, minw, minh;
+
+    GetCursorPos(&c);
+    rs_game_rect(&g);
+    gw = g.right - g.left;
+    gh = g.bottom - g.top;
+    if (gw < 1 || gh < 1)
+        return;
+    dx = c.x - s_wd_c.x;
+    dy = c.y - s_wd_c.y;
+    minw = gw * 20 / 100;
+    minh = gh * 30 / 100;
+    if (s_wdrag == 16) {
+        OffsetRect(&r, dx, dy);
+        if (r.left < g.left) OffsetRect(&r, g.left - r.left, 0);
+        if (r.right > g.right) OffsetRect(&r, g.right - r.right, 0);
+        if (r.top < g.top) OffsetRect(&r, 0, g.top - r.top);
+        if (r.bottom > g.bottom) OffsetRect(&r, 0, g.bottom - r.bottom);
+    } else {
+        if (s_wdrag & 1) { r.left += dx; if (r.left < g.left) r.left = g.left; if (r.right - r.left < minw) r.left = r.right - minw; }
+        if (s_wdrag & 2) { r.right += dx; if (r.right > g.right) r.right = g.right; if (r.right - r.left < minw) r.right = r.left + minw; }
+        if (s_wdrag & 4) { r.top += dy; if (r.top < g.top) r.top = g.top; if (r.bottom - r.top < minh) r.top = r.bottom - minh; }
+        if (s_wdrag & 8) { r.bottom += dy; if (r.bottom > g.bottom) r.bottom = g.bottom; if (r.bottom - r.top < minh) r.bottom = r.top + minh; }
+    }
+    SetWindowPos(hw, NULL, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOACTIVATE | SWP_NOZORDER);
+    s_win_fx = (int)((long long)(r.left - g.left) * 10000 / gw);
+    s_win_fy = (int)((long long)(r.top - g.top) * 10000 / gh);
+    s_win_fw = (int)((long long)(r.right - r.left) * 10000 / gw);
+    s_win_fh = (int)((long long)(r.bottom - r.top) * 10000 / gh);
+    s_win_user = 1;
+    InvalidateRect(hw, NULL, FALSE);
+}
+
+static LPCSTR rs_win_cursor(int m)
+{
+    if (m == 16) return IDC_SIZEALL;
+    if (m == 3 || m == 1 || m == 2) return IDC_SIZEWE;
+    if (m == 4 || m == 8 || m == 12) return IDC_SIZENS;
+    if (m == 5 || m == 10) return IDC_SIZENWSE;
+    if (m == 6 || m == 9) return IDC_SIZENESW;
+    return IDC_ARROW;
 }
 
 /* The overlay is a separate top-most window, so it has to follow the game's: hidden while the game is minimised
@@ -1591,7 +2213,7 @@ static int rs_follow(HWND hw)
     ClientToScreen(game, &tl);
     rs_target(tl.x, tl.y, cl.right, cl.bottom, &want);
     GetWindowRect(hw, &cur);
-    if (cur.left != want.left || cur.top != want.top || cur.right != want.right || cur.bottom != want.bottom) {
+    if (!s_wdrag && (cur.left != want.left || cur.top != want.top || cur.right != want.right || cur.bottom != want.bottom)) {
         SetWindowPos(hw, HWND_TOPMOST, want.left, want.top, want.right - want.left, want.bottom - want.top, SWP_NOACTIVATE);
         InvalidateRect(hw, NULL, FALSE);
     }
@@ -1619,6 +2241,10 @@ static LRESULT CALLBACK rs_proc(HWND hw, UINT msg, WPARAM wp, LPARAM lp)
     case WM_ERASEBKGND:
         return 1;
     case WM_TIMER:
+        if (s_rst_arm && GetTickCount() - s_rst_arm >= 3000u) {      /* the restart button was not confirmed */
+            s_rst_arm = 0;
+            InvalidateRect(hw, NULL, FALSE);
+        }
         if (rs_follow(hw))
             rs_pad_tick();
         return 0;
@@ -1652,6 +2278,10 @@ static LRESULT CALLBACK rs_proc(HWND hw, UINT msg, WPARAM wp, LPARAM lp)
     }
     case WM_MOUSEMOVE: {
         POINT p = { s_rtl ? s_curW - 1 - (short)LOWORD(lp) : (short)LOWORD(lp), (short)HIWORD(lp) };
+        if (s_wdrag) {
+            rs_win_drag(hw);
+            return 0;
+        }
         if (s_drag) {
             rs_drag_to(p.y);
             return 0;
@@ -1661,6 +2291,14 @@ static LRESULT CALLBACK rs_proc(HWND hw, UINT msg, WPARAM wp, LPARAM lp)
     }
     case WM_LBUTTONUP:
     case WM_CAPTURECHANGED:
+        if (s_wdrag) {
+            s_wdrag = 0;
+            if (msg == WM_LBUTTONUP)
+                ReleaseCapture();
+            rs_save();                                   /* the new place and size go to the ini */
+            InvalidateRect(hw, NULL, FALSE);
+            return 0;
+        }
         if (s_drag) {
             s_drag = 0;
             if (msg == WM_LBUTTONUP)
@@ -1681,6 +2319,25 @@ static LRESULT CALLBACK rs_proc(HWND hw, UINT msg, WPARAM wp, LPARAM lp)
         }
         if (msg == WM_MBUTTONDOWN || msg == WM_XBUTTONDOWN)
             return msg == WM_XBUTTONDOWN ? TRUE : 0;
+        if (msg == WM_LBUTTONDOWN && !s_cap && PtInRect(&s_rst_rc, p)) {     /* [ Restart game ]: two clicks */
+            if (s_rst_arm && GetTickCount() - s_rst_arm < 3000u) {
+                rs_save();
+                rs_restart_game();
+            }
+            s_rst_arm = GetTickCount();
+            InvalidateRect(hw, NULL, FALSE);
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN && !s_cap) {          /* the red bar moves the window, its edges resize it */
+            int hit = rs_win_hit(hw, (short)LOWORD(lp), (short)HIWORD(lp));
+            if (hit) {
+                s_wdrag = hit;
+                GetCursorPos(&s_wd_c);
+                GetWindowRect(hw, &s_wd_r);
+                SetCapture(hw);
+                return 0;
+            }
+        }
         if (msg == WM_LBUTTONDOWN && !s_cap && s_trk_on && PtInRect(&s_trk_hit, p)) {
             s_drag = 1;
             SetCapture(hw);
@@ -1711,14 +2368,20 @@ static LRESULT CALLBACK rs_proc(HWND hw, UINT msg, WPARAM wp, LPARAM lp)
     case WM_MOUSEWHEEL:
         if (s_cap == 1)
             ct_assign_key(RS_WHEEL);
-        else if (s_page == 0)
-            rs_change((short)HIWORD(wp) > 0 ? 1 : -1);
         else
-            ct_select((short)HIWORD(wp) > 0 ? -1 : 1);
+            rs_wheel((short)HIWORD(wp) > 0);      /* wheel up = the row above; values change with Left / Right or a click */
         return 0;
-    case WM_SETCURSOR:
-        SetCursor(LoadCursor(NULL, IDC_ARROW));
+    case WM_SETCURSOR: {
+        POINT c;
+        int m = s_wdrag;
+        if (!m && s_win_mode && !s_cap) {
+            GetCursorPos(&c);
+            ScreenToClient(hw, &c);
+            m = rs_win_hit(hw, c.x, c.y);
+        }
+        SetCursor(LoadCursor(NULL, rs_win_cursor(m)));
         return TRUE;
+    }
     case WM_CLOSE:
         InterlockedExchange(&s_quit, 1);
         DestroyWindow(hw);
@@ -1773,6 +2436,9 @@ static DWORD WINAPI rs_thread(LPVOID unused)
     s_top = 0;
     s_page = 0;
     s_cap = 0;
+    s_cat = -1;
+    s_rst_arm = 0;
+    rs_build_cats();
     {
         RECT want;
         rs_target(rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, &want);
@@ -1842,6 +2508,16 @@ static void rs_open_hook(const char *path)
     for (i = 0; path[i] && i < sizeof low - 1; i++)
         low[i] = (char)((path[i] >= 'A' && path[i] <= 'Z') ? path[i] + 32 : path[i] == '/' ? '\\' : path[i]);
     low[i] = 0;
+    if (strstr(low, "level_a.str") || strstr(low, "loading.viv")) {     /* a level is loading: the free camera ends (new world) */
+        extern void game_freecam_levelload(void);
+        extern void game_editor_levelload(const char *lowpath);
+        game_freecam_levelload();
+        game_editor_levelload(low);
+    }
+    if (strstr(low, "\\sp\\hud2.xml")) {                                  /* the mission HUD is built: a second time in one level = a mission restart */
+        extern void game_editor_hudload(void);
+        game_editor_hudload();
+    }
     p = strstr(low, "scrns\\");
     if (!p)
         return;
@@ -1965,6 +2641,38 @@ static int rs_patch_entry(unsigned char *buf, size_t size, const RsPatch *pt)
     return 1;
 }
 
+/* CROSS-LEVEL WEAPONS (2026-11-21 experiment, RECOMP_LEVELPATCH=1): a level's archive is replaced by mods\levelpatch\<level>_level_a.str, the same file
+ * with the records of a weapon of another level appended (tools\str\merge.py). */
+static void rs_levelpatch(const WCHAR *rel, WCHAR *host, DWORD host_size)
+{
+    static const WCHAR tail[] = L"level_a.str";
+    WCHAR nrel[MAX_PATH], lvl[40], file[MAX_PATH], full[MAX_PATH];
+    size_t rl, j, e, s, k;
+    const char *on = getenv("RECOMP_LEVELPATCH");
+    if (!on || *on != '1')
+        return;
+    wcsncpy_s(nrel, MAX_PATH, rel, _TRUNCATE);
+    for (j = 0; nrel[j]; j++)
+        if (nrel[j] == L'/')
+            nrel[j] = L'\\';
+    rl = wcslen(nrel);
+    if (rl < 14 || _wcsicmp(nrel + rl - 11, tail) || nrel[rl - 12] != L'\\')
+        return;
+    e = rl - 12;
+    for (s = e; s > 0 && nrel[s - 1] != L'\\'; s--)
+        ;
+    if (e - s < 1 || e - s >= 39)
+        return;
+    for (k = 0; k < e - s; k++)
+        lvl[k] = nrel[s + k];
+    lvl[k] = 0;
+    swprintf_s(file, MAX_PATH, L"mods\\levelpatch\\%s_level_a.str", lvl);
+    if (!GetFullPathNameW(file, MAX_PATH, full, NULL) || GetFileAttributesW(full) == INVALID_FILE_ATTRIBUTES)
+        return;
+    wcscpy_s(host, host_size, full);
+    fprintf(stderr, "[LEVELPATCH] %ls -> %ls\n", rel, full);
+}
+
 static void rs_path_rewrite(const WCHAR *rel, WCHAR *host, DWORD host_size)
 {
     static volatile LONG busy;
@@ -1977,6 +2685,8 @@ static void rs_path_rewrite(const WCHAR *rel, WCHAR *host, DWORD host_size)
     DWORD got = 0, wrote = 0;
     ULARGE_INTEGER sz;
 
+    hudhide_rewrite(rel, host, host_size);
+    rs_levelpatch(rel, host, host_size);
     if (!s_enabled)
         return;
     for (f = 0; f < RS_NFILES; f++) {
@@ -2100,6 +2810,7 @@ void rs_install(void)
     if (s_enabled) {
         g_xbox_open_hook = rs_open_hook;
         g_xbox_path_rewrite = rs_path_rewrite;
+        (void)hudhide_get(0);               /* reads the switches and sets the HUD picture cells before the first draw */
         CloseHandle(CreateThread(NULL, 0, rs_hotkey_thread, NULL, 0, NULL));
     }
 }

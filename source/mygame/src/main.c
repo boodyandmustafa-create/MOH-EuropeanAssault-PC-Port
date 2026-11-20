@@ -38,6 +38,7 @@
 #include <string.h>
 #include <wchar.h>
 #include <math.h>
+#include <intrin.h>
 
 int game_save_root_w(WCHAR *out, DWORD n);
 static void migrate_saves_from_appdata(const WCHAR *root);
@@ -389,6 +390,7 @@ static void game_sampler_start(void)
  * a third of its speed. Uses CPU sets (Windows 10 1703+): the process default excludes the core, the game
  * thread selects it. */
 static int s_pin_core = 2, s_pin_on;
+static int s_pin_class = -1;    /* EfficiencyClass of the core the game loop is pinned to (higher = faster on hybrid CPUs) */
 
 /* Pins (on) or releases (off) the calling thread, the game loop. */
 static void game_pin_set(int on)
@@ -419,6 +421,7 @@ static void game_pin_set(int on)
             break;
         if (p->Type == CpuSetInformation) {
             if (p->CpuSet.CoreIndex == (BYTE)core) {
+                s_pin_class = p->CpuSet.EfficiencyClass;
                 if (ng < 16)
                     mine[ng++] = p->CpuSet.Id;
             } else if (n < 256) {
@@ -459,6 +462,7 @@ static LONGLONG hw_now(void)
  * the threads; the busiest few are frozen for a moment to read their instruction pointer, named as
  * module+offset (our exe, d3d11, the GPU driver, ...). One [HITCH-THREADS] line each. */
 #include <tlhelp32.h>
+#include <psapi.h>
 static void hitch_scan(void)
 {
     struct { DWORD id; HANDLE h; ULONG64 c0, d; } th[160];
@@ -552,17 +556,196 @@ static void hitch_scan(void)
         fprintf(stderr, "%s\n", out[i]);
 }
 
+/* ---- Diagnostics for bug reports. Startup, exit, a crash or a long hitch only; nothing here runs per frame. ---- */
+static int s_prev_unclean;      /* the last run did not end cleanly (its log was kept as play_log_crash.txt) */
+
+/* Removes running.flag: a clean end of the run. Left in place by a crash, a kill or a power cut. */
+void diag_clean_exit(void)
+{
+    DeleteFileA("running.flag");
+}
+
+static void diag_exit_hook(const char *why)
+{
+    (void)why;
+    diag_clean_exit();
+}
+
+/* Before the log is rotated: a flag left by the last run means it died, so keep its log beside the new ones. */
+static void diag_run_marker(void)
+{
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    HANDLE h;
+
+    if (GetFileAttributesA("running.flag") != INVALID_FILE_ATTRIBUTES) {
+        /* a .bat that redirects stderr empties play_log.txt first: do not replace a kept log with that */
+        if (GetFileAttributesExA("play_log.txt", GetFileExInfoStandard, &fa) && fa.nFileSizeLow > 4096
+            && CopyFileA("play_log.txt", "play_log_crash.txt", FALSE))
+            s_prev_unclean = 1;
+    }
+    h = CreateFileA("running.flag", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL, CREATE_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE)
+        CloseHandle(h);
+    atexit(diag_clean_exit);
+}
+
+/* "module+0xoffset" for a host address, or the bare address when it is in no module. */
+static void diag_addr(char *out, size_t n, unsigned long long a)
+{
+    HMODULE mod = NULL;
+    char name[MAX_PATH];
+    const char *b;
+
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)(uintptr_t)a, &mod) && GetModuleFileNameA(mod, name, sizeof name)) {
+        b = strrchr(name, '\\');
+        _snprintf(out, n, "%s+0x%llx", b ? b + 1 : name, a - (unsigned long long)(uintptr_t)mod);
+    } else {
+        _snprintf(out, n, "0x%llx (no module)", a);
+    }
+    out[n - 1] = 0;
+}
+
+/* Every loaded DLL that is not Windows' own: overlays (Discord, RTSS, Steam, ReShade, antivirus hooks) show up here. */
+static void diag_list_dlls(const char *tag)
+{
+    HMODULE mods[512];
+    DWORD need = 0, i;
+    char win[MAX_PATH], path[MAX_PATH];
+    size_t wl;
+
+    if (!K32EnumProcessModules(GetCurrentProcess(), mods, sizeof mods, &need))
+        return;
+    wl = GetWindowsDirectoryA(win, sizeof win);
+    for (i = 0; i < need / sizeof mods[0] && i < 512; i++) {
+        if (!GetModuleFileNameA(mods[i], path, sizeof path))
+            continue;
+        if (wl && wl < sizeof win && !_strnicmp(path, win, wl))
+            continue;
+        fprintf(stderr, "%s %s\n", tag, path);
+    }
+}
+
+static void diag_sysinfo(void)
+{
+    typedef LONG (WINAPI *rgv_fn)(OSVERSIONINFOEXW *);
+    OSVERSIONINFOEXW vi;
+    rgv_fn rgv = (rgv_fn)(void *)GetProcAddress(GetModuleHandleA("ntdll.dll"), "RtlGetVersion");
+    SYSTEM_INFO si;
+    MEMORYSTATUSEX ms;
+    DEVMODEA dm;
+    DISPLAY_DEVICEA dd;
+    int r[4], i, cls[8] = {0}, ncls = 0;
+    char brand[49];
+    DWORD len = 0, off;
+    unsigned char *buf;
+
+    fprintf(stderr, "[SYSINFO] build %s %s\n", __DATE__, __TIME__);
+    if (s_prev_unclean)
+        fprintf(stderr, "[SYSINFO] the previous run did not end cleanly; its log is kept as play_log_crash.txt\n");
+    memset(&vi, 0, sizeof vi);
+    vi.dwOSVersionInfoSize = sizeof vi;
+    if (rgv && rgv(&vi) == 0)
+        fprintf(stderr, "[SYSINFO] Windows %lu.%lu build %lu\n", (unsigned long)vi.dwMajorVersion,
+                (unsigned long)vi.dwMinorVersion, (unsigned long)vi.dwBuildNumber);
+    for (i = 0; i < 3; i++) {
+        __cpuid(r, 0x80000002 + i);
+        memcpy(brand + 16 * i, r, 16);
+    }
+    brand[48] = 0;
+    GetNativeSystemInfo(&si);
+    fprintf(stderr, "[SYSINFO] CPU %s, %lu logical processors\n", brand, (unsigned long)si.dwNumberOfProcessors);
+    GetSystemCpuSetInformation(NULL, 0, &len, GetCurrentProcess(), 0);
+    if (len && (buf = (unsigned char *)malloc(len)) != NULL) {
+        if (GetSystemCpuSetInformation((PSYSTEM_CPU_SET_INFORMATION)buf, len, &len, GetCurrentProcess(), 0)) {
+            for (off = 0; off < len;) {
+                PSYSTEM_CPU_SET_INFORMATION p = (PSYSTEM_CPU_SET_INFORMATION)(buf + off);
+                if (!p->Size)
+                    break;
+                if (p->Type == CpuSetInformation && p->CpuSet.EfficiencyClass < 8)
+                    cls[p->CpuSet.EfficiencyClass]++;
+                off += p->Size;
+            }
+            fprintf(stderr, "[SYSINFO] CPU efficiency classes (logical processors per class):");
+            for (i = 0; i < 8; i++)
+                if (cls[i]) {
+                    fprintf(stderr, " class%d=%d", i, cls[i]);
+                    ncls++;
+                }
+            fprintf(stderr, "%s\n", ncls > 1 ? "  (hybrid CPU: higher class = faster cores)" : "");
+        }
+        free(buf);
+    }
+    memset(&ms, 0, sizeof ms);
+    ms.dwLength = sizeof ms;
+    if (GlobalMemoryStatusEx(&ms))
+        fprintf(stderr, "[SYSINFO] RAM %llu MB total, %llu MB free\n", ms.ullTotalPhys >> 20, ms.ullAvailPhys >> 20);
+    memset(&dd, 0, sizeof dd);
+    dd.cb = sizeof dd;
+    for (i = 0; EnumDisplayDevicesA(NULL, (DWORD)i, &dd, 0) && i < 8; i++) {
+        char ver[64] = "?", date[64] = "?";
+        HKEY k;
+        if (!(dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) && !(dd.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE)) {
+            dd.cb = sizeof dd;
+            continue;
+        }
+        if (!_strnicmp(dd.DeviceKey, "\\Registry\\Machine\\", 18)
+            && RegOpenKeyExA(HKEY_LOCAL_MACHINE, dd.DeviceKey + 18, 0, KEY_READ, &k) == ERROR_SUCCESS) {
+            DWORD sz = sizeof ver;
+            RegQueryValueExA(k, "DriverVersion", NULL, NULL, (LPBYTE)ver, &sz);
+            sz = sizeof date;
+            RegQueryValueExA(k, "DriverDate", NULL, NULL, (LPBYTE)date, &sz);
+            RegCloseKey(k);
+        }
+        ver[sizeof ver - 1] = date[sizeof date - 1] = 0;
+        fprintf(stderr, "[SYSINFO] display adapter: %s, driver %s (%s)%s\n", dd.DeviceString, ver, date,
+                (dd.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) ? " primary" : "");
+        dd.cb = sizeof dd;
+    }
+    memset(&dm, 0, sizeof dm);
+    dm.dmSize = sizeof dm;
+    if (EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &dm))
+        fprintf(stderr, "[SYSINFO] desktop %lux%lu at %lu Hz\n", (unsigned long)dm.dmPelsWidth,
+                (unsigned long)dm.dmPelsHeight, (unsigned long)dm.dmDisplayFrequency);
+    diag_list_dlls("[SYSINFO] loaded non-Windows module:");
+}
+
 static DWORD WINAPI hitch_thread(LPVOID unused)
 {
-    int stalled = 0, lines = 0;
+    int stalled = 0, lines = 0, test_crash = getenv("RECOMP_TEST_CRASH") != NULL, dlls_again = 0;
     LONGLONG t0 = 0;
+    DWORD tick0 = GetTickCount();
     (void)unused;
     for (;;) {
         LONGLONG beat, now, ms;
         Sleep(20);
+        if (test_crash && GetTickCount() - tick0 > 20000) {
+            /* RECOMP_TEST_CRASH=1 (never a hotkey): proves crash.dmp, the flushed log and play_log_crash.txt work. */
+            fprintf(stderr, "[CRASH] RECOMP_TEST_CRASH: raising a test exception now\n");
+            RaiseException(0xE0DEAD01u, EXCEPTION_NONCONTINUABLE, 0, NULL);
+        }
         beat = s_hw_beat;
         now = hw_now();
         ms = (now - beat) * 1000 / s_hw_qf;
+        {   /* Long-session telemetry, one [RES] line a minute: a slow leak (memory, handles, GDI/USER objects) shows as a
+             * climbing column in play_log.txt well before a crash. */
+            static LONGLONG next_res;
+            if (now >= next_res) {
+                PROCESS_MEMORY_COUNTERS_EX pm;
+                DWORD hc = 0;
+                next_res = now + 60 * s_hw_qf;
+                memset(&pm, 0, sizeof pm);
+                pm.cb = sizeof pm;
+                GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS *)&pm, sizeof pm);
+                GetProcessHandleCount(GetCurrentProcess(), &hc);
+                fprintf(stderr, "[RES] t=%lu s working %lu MB private %lu MB peak %lu MB handles %lu gdi %lu user %lu\n",
+                        (unsigned long)(GetTickCount() / 1000), (unsigned long)(pm.WorkingSetSize >> 20),
+                        (unsigned long)(pm.PrivateUsage >> 20), (unsigned long)(pm.PeakWorkingSetSize >> 20), (unsigned long)hc,
+                        (unsigned long)GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS),
+                        (unsigned long)GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS));
+            }
+        }
         if (!stalled && ms >= 200 && lines < 600) {
             CONTEXT cx;
             uint32_t chain[SAMP_CHAIN], n = 0, i;
@@ -580,9 +763,12 @@ static DWORD WINAPI hitch_thread(LPVOID unused)
                     samp_walk(chain, &n);
                 ResumeThread(s_hw_target);
             }
-            len = _snprintf(buf, sizeof buf - 1, "[HITCH] t=%lu game loop silent for %lld ms, rip exe+0x%llx, guest callers:",
-                            (unsigned long)GetTickCount(), ms,
-                            rip - (unsigned long long)(uintptr_t)GetModuleHandleA(NULL));
+            {
+                char where[160];
+                diag_addr(where, sizeof where, rip);
+                len = _snprintf(buf, sizeof buf - 1, "[HITCH] t=%lu game loop silent for %lld ms, rip %s, guest callers:",
+                                (unsigned long)GetTickCount(), ms, where);
+            }
             for (i = 0; i < n && len > 0 && len < 440; i++)
                 len += _snprintf(buf + len, sizeof buf - 1 - len, " %05X", chain[i]);
             fprintf(stderr, "%.*s\n", len > 0 ? len : 0, buf);
@@ -599,6 +785,10 @@ static DWORD WINAPI hitch_thread(LPVOID unused)
             fprintf(stderr, "[HITCH] t=%lu running again after about %lld ms\n", (unsigned long)GetTickCount(),
                     (beat - t0) * 1000 / s_hw_qf);
             lines++;
+            if (!dlls_again && (beat - t0) * 1000 / s_hw_qf >= 500) {
+                dlls_again = 1;     /* overlays often inject after start-up: list the modules again at the first long hitch */
+                diag_list_dlls("[HITCH-DLLS]");
+            }
         }
     }
     return 0;
@@ -661,8 +851,8 @@ void game_sampler_note_thread(void)
                 s_pin_core = c;
                 game_pin_set(1);
                 if (s_pin_on)
-                    fprintf(stderr, "[PIN] game loop on physical core %d, the rest of the process elsewhere"
-                            " (F8 switches it)\n", c);
+                    fprintf(stderr, "[PIN] game loop on physical core %d (efficiency class %d), the rest of the process elsewhere"
+                            " (F8 switches it)\n", c, s_pin_class);
             }
         }
         QueryPerformanceFrequency(&qf);
@@ -892,6 +1082,103 @@ static void crash_to_file(void)
     freopen(path, "w", stderr);
 }
 
+/* Any host address as "module+offset" (the exe, ntdll, xaudio2, a driver, ...), or the bare address when it is in no module. */
+static void crash_module(const char *label, uintptr_t a)
+{
+    HMODULE mod = NULL;
+    char name[MAX_PATH];
+    const char *b;
+
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)a, &mod) && GetModuleFileNameA(mod, name, sizeof name)) {
+        b = strrchr(name, '\\');
+        fprintf(stderr, "%s %s+0x%llX\n", label, b ? b + 1 : name, (unsigned long long)(a - (uintptr_t)mod));
+    } else {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (VirtualQuery((LPCVOID)a, &mbi, sizeof mbi))
+            fprintf(stderr, "%s 0x%llX (no module; region 0x%llX state 0x%lX type 0x%lX protect 0x%lX)\n", label,
+                    (unsigned long long)a, (unsigned long long)(uintptr_t)mbi.AllocationBase,
+                    (unsigned long)mbi.State, (unsigned long)mbi.Type, (unsigned long)mbi.Protect);
+        else
+            fprintf(stderr, "%s 0x%llX (no module)\n", label, (unsigned long long)a);
+    }
+}
+
+/* Which thread faulted, as a reader of crash.txt can tell without a debugger: its id, where it started (module+offset),
+ * and every word on its stack that points into any loaded module, not only our exe. The first words raw. */
+static void crash_thread_report(PEXCEPTION_POINTERS ep)
+{
+    typedef LONG (NTAPI *nqit_fn)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+    nqit_fn nqit = (nqit_fn)(void *)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryInformationThread");
+    PVOID start = NULL;
+    const uintptr_t *sp = (const uintptr_t *)ep->ContextRecord->Rsp;
+    int i, shown = 0;
+
+    fprintf(stderr, "  exception: code 0x%08lX info0 %llu (0 read, 1 write, 8 execute) info1 0x%llX thread %lu\n",
+            (unsigned long)ep->ExceptionRecord->ExceptionCode,
+            (unsigned long long)ep->ExceptionRecord->ExceptionInformation[0],
+            (unsigned long long)ep->ExceptionRecord->ExceptionInformation[1], (unsigned long)GetCurrentThreadId());
+    if (nqit && nqit(GetCurrentThread(), 9 /* ThreadQuerySetWin32StartAddress */, &start, sizeof start, NULL) >= 0 && start)
+        crash_module("  thread started at", (uintptr_t)start);
+    crash_module("  rip in", (uintptr_t)ep->ContextRecord->Rip);
+    fprintf(stderr, "  rsp 0x%llX rax 0x%llX rcx 0x%llX rdx 0x%llX\n", (unsigned long long)ep->ContextRecord->Rsp,
+            (unsigned long long)ep->ContextRecord->Rax, (unsigned long long)ep->ContextRecord->Rcx,
+            (unsigned long long)ep->ContextRecord->Rdx);
+    {   /* only words inside this thread's own stack: the walk must not fault inside the handler */
+        uintptr_t top = (uintptr_t)((NT_TIB *)NtCurrentTeb())->StackBase, lo = (uintptr_t)((NT_TIB *)NtCurrentTeb())->StackLimit;
+        int words = (ep->ContextRecord->Rsp >= lo && ep->ContextRecord->Rsp < top) ? (int)((top - ep->ContextRecord->Rsp) / 8) : 0;
+        if (words > 1024)
+            words = 1024;
+        for (i = 0; i < 6 && i < words; i++)
+            fprintf(stderr, "  [rsp+%d] 0x%llX\n", i * 8, (unsigned long long)sp[i]);
+        if (!words)
+            fprintf(stderr, "  rsp is outside this thread's stack\n");
+        for (i = 0; i < words && shown < 16; i++) {
+            HMODULE mod = NULL;
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   (LPCSTR)sp[i], &mod)) {
+                char lab[32];
+                _snprintf(lab, sizeof lab, "  stack[%d]", i * 8);
+                crash_module(lab, sp[i]);
+                shown++;
+            }
+        }
+    }
+}
+
+/* The last word on a crash that nothing handled: a small minidump (threads, stacks, modules incl. unloaded ones) beside the
+ * exe, once. No game memory in it, a few hundred KB; the player can attach it to a report. */
+static LONG WINAPI crash_dump_filter(PEXCEPTION_POINTERS ep)
+{
+    static LONG once;
+    char path[MAX_PATH];
+    DWORD n;
+    char *slash;
+    HANDLE f;
+
+    if (InterlockedExchange(&once, 1))
+        return EXCEPTION_CONTINUE_SEARCH;
+    fflush(stderr);                 /* the log's last half second is still in the buffer */
+    n = GetModuleFileNameA(NULL, path, MAX_PATH - 16);
+    if (!n || n >= MAX_PATH - 16)
+        return EXCEPTION_CONTINUE_SEARCH;
+    slash = strrchr(path, '\\');
+    strcpy(slash ? slash + 1 : path, "crash.dmp");
+    f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f != INVALID_HANDLE_VALUE) {
+        MINIDUMP_EXCEPTION_INFORMATION mei;
+        mei.ThreadId = GetCurrentThreadId();
+        mei.ExceptionPointers = ep;
+        mei.ClientPointers = FALSE;
+        MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), f,
+                          (MINIDUMP_TYPE)(MiniDumpNormal | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules), &mei, NULL, NULL);
+        CloseHandle(f);
+        fprintf(stderr, "[CRASH] minidump written: %s\n", path);
+        fflush(stderr);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
 {
     if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_INT_DIVIDE_BY_ZERO) {
@@ -940,6 +1227,7 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
             g_ebx, g_esi, g_edi);
         fprintf(stderr, "  Xbox VA of fault: 0x%08X\n",
             (uint32_t)(fault_addr - (uintptr_t)g_xbox_mem_offset));
+        crash_thread_report(ep);
         print_guest_context((void *)ep->ContextRecord->Rip);
 
         /*
@@ -1032,8 +1320,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     recomp_exit_hook_set2(pgo_sweep_at_exit);
 #endif
 
+    diag_run_marker(); /* before rs_startup rotates the log: a run that did not end cleanly keeps its log */
     rs_startup();      /* recomp_settings.ini -> the environment (frame rate, resolution, fullscreen, Super Accuracy) */
     rs_install();      /* the Credits item of Options opens the Recomp Settings screen */
+    diag_sysinfo();    /* hardware, driver and injected-DLL lines at the top of play_log.txt */
+#ifndef RECOMP_PGI
+    {
+        extern void recomp_exit_hook_set2(void (*fn)(const char *));
+        recomp_exit_hook_set2(diag_exit_hook);      /* a window close ends the process with TerminateProcess: no atexit */
+    }
+#endif
 
     /* Unbuffered output for immediate visibility during debugging */
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -1124,6 +1420,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME);
     SymInitialize(GetCurrentProcess(), NULL, TRUE);
     AddVectoredExceptionHandler(1, veh_handler);
+    SetUnhandledExceptionFilter(crash_dump_filter);
+    {   /* the kernel's read watch (RECOMP_WATCH_DISTINCT) names the reading function through our dbghelp session */
+        extern void (*g_watch_name_hook)(const char *label, uintptr_t a);
+        g_watch_name_hook = crash_name;
+    }
 
     /* Step 1: Load XBE */
     if (!load_xbe(YOUR_GAME_XBE_PATH, &xbe_data, &xbe_size)) {

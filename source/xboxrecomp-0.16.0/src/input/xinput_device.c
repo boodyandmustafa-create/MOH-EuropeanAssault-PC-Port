@@ -167,6 +167,11 @@ static DWORD input_get_state_impl(DWORD dwPort, XBOX_INPUT_STATE *pState)
         int xi = xi_index(dwPort);
         result = xi < 0 ? ERROR_DEVICE_NOT_CONNECTED : XInputGetState((DWORD)xi, &xi_state);
     }
+    {
+        extern volatile int g_mkb_real_pad;
+        if (dwPort == 0)
+            g_mkb_real_pad = (result == ERROR_SUCCESS);
+    }
     if (result != ERROR_SUCCESS) {
         g_controller_connected[dwPort] = FALSE;
         if (dwPort == 0) {

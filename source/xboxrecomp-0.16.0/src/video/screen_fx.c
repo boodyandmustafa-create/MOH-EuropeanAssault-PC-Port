@@ -15,6 +15,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* the first-person weapon gets the same blood / dust / rain events (nv2a_gpu.c, weapon lighting) */
+extern void nv2a_gpu_weapon_trigger(int kind, float strength);
+extern void nv2a_gpu_weapon_rain(float strength);
+
 #define FX_BLOOD 0
 #define FX_DIRT  1
 #define FX_RAIN  2                           /* raindrops: not triggered one by one but sustained (recomp_screenfx_rain) */
@@ -432,13 +436,16 @@ static void fx_bar(uint32_t *bits, int W, int H, RECT *dirty)
     if (r - l <= 2 * bd || b - t <= 2 * bd)
         return;
     fill_r = l + bd + (int)((float)(r - l - 2 * bd) * (float)s_bar_v[4] * 0.001f + 0.5f);
+    int fill_t = b - bd - (int)((float)(b - t - 2 * bd) * (float)s_bar_v[4] * 0.001f + 0.5f);
+    int vertical = (b - t) > (r - l);
+
     for (y = t; y < b; y++)
         for (x = l; x < r; x++) {
             uint32_t c;
             if (x < l + bd || x >= r - bd || y < t + bd || y >= b - bd)
                 c = 0xE6242424u;
-            else if (x < fill_r)
-                c = 0xFFFFC800u;
+            else if (vertical ? (y >= fill_t) : (x < fill_r))
+                c = 0xFFD3D3D3u; // Light Grey (matches stance icons)
             else
                 c = 0x96000000u;
             fx_over(&bits[(size_t)y * W + x], c);
@@ -856,6 +863,7 @@ void recomp_screenfx_set(int kind, int level)
  * raindrops coming for the next 1.5 s; 0 lets the rain stop (existing drops finish their life). */
 void recomp_screenfx_rain(float strength)
 {
+    nv2a_gpu_weapon_rain(strength);           /* the first-person weapon gets wet too, whatever the screen drops are set to */
     fx_start();
     if (strength <= 0.0f || !s_game) {
         s_rain_until = 0;
@@ -877,6 +885,7 @@ void recomp_screenfx_trigger(int kind, float strength)
 {
     DWORD now = GetTickCount();
     kind = kind == 1 ? 1 : 0;
+    nv2a_gpu_weapon_trigger(kind, strength);  /* dust / blood on the first-person weapon (its own switch, not the screen effect's) */
     fx_start();
     if (s_level[kind] <= 0 || !s_game)
         return;

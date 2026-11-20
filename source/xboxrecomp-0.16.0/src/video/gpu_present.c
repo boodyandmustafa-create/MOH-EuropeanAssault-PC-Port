@@ -205,6 +205,12 @@ int gpu_present_frame(const uint32_t *pixels)
             wide = e && e[0] == '1';
         }
         asp = wide ? 16.0f / 9.0f : (float)s_w / (float)s_h;
+        {   /* ultrawide: the gameplay picture's own shape (nv2a_gpu.c) */
+            extern float recomp_present_aspect(float dflt);
+            extern void recomp_wide_client(unsigned cw, unsigned ch);
+            recomp_wide_client(s_bw, s_bh);
+            asp = recomp_present_aspect(asp);
+        }
         sx = (float)s_bw / asp;
         sy = (float)s_bh;
         vp.Height = sx < sy ? sx : sy;

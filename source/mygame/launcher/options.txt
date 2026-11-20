@@ -1,6 +1,6 @@
 # Launcher options. One option per line:  tab|key|type|default|values|dep
 #
-#   tab     game, controls, mods, extras, recomp, saves, credits
+#   tab     game, controls, mods, extras, hud, cheats, recomp, saves, credits
 #   key     the key written to recomp_settings.ini.  @fov and @draw are special (fov_saved.txt / draw_saved.txt).
 #           Labels come from lang\en.txt / lang\ar.txt:  <key> = name,  <key>.d = description,
 #           <key>.v.<value> = how a value is shown (otherwise the raw value is shown).
@@ -37,7 +37,7 @@ controls|sens|choice|1.00|0.25,0.50,0.75,1.00,1.25,1.50,2.00,3.00
 controls|invert_y|toggle|0|
 controls|split_pads|toggle|0|
 controls|icons|choice|auto|auto,pad,keyboard
-controls|icon_style|choice|ps|xbox,ps
+controls|icon_style|choice|ps5|xbox,xbox360,ps2,ps4,ps5
 controls|keys_note|note||
 controls|reset_controls|action||
 controls|bind_move0|movekey|w|
@@ -67,15 +67,20 @@ mods|open_textures|action||
 mods|open_sounds|action||
 mods|open_languages|action||
 mods|mods_note|note||
-extras|super_accuracy|toggle|1|
+mods|freecam_world|choice|0|0,1
+mods|freecam_speed|choice|3|1,2,3,4,5
 extras|blood|choice|3|0,1,2,3
+extras|explosion_size|choice|0|0,1,2,3,4
 extras|blood_time|choice|2|0,1,2,3,4,5,6,7,8
 extras|blood_color|choice|1|0,1,2,3
 extras|blood_hue|choice|350|0,10,20,30,40,50,60,70,80,90,100,110,120,130,140,150,160,170,180,190,200,210,220,230,240,250,260,270,280,290,300,310,320,330,340,350|blood_color=3
 extras|blood_sat|choice|95|0,5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100|blood_color=3
 extras|blood_bright|choice|55|10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100|blood_color=3
 extras|keep_corpses|toggle|0|
+extras|corpse_60hz|toggle|0|
 extras|screen_blood|choice|2|0,1,2,3
+extras|blood_stains|choice|2|0,1,2,3
+extras|stain_nodes|choice|1500|100,320,600,1000,1500,3000,5000|blood_stains
 extras|screen_dirt|choice|3|0,1,2,3
 extras|rain|choice|0|0,1
 extras|screen_rain|choice|0|0,1,2,3|rain
@@ -85,13 +90,47 @@ extras|rain_speed|choice|2|0,1,2,3|rain
 extras|sprint_speed|choice|1.50|1.00,1.25,1.50,1.75,2.00,2.50,3.00
 extras|sprint_time|choice|5.0|3.0,4.0,5.0,6.0,8.0,10.0,15.0
 extras|sprint_recover|choice|8.0|4.0,6.0,8.0,10.0,15.0,20.0
-extras|stamina_bar|toggle|1|
 extras|enemy_count|choice|1|1,2,3,4,5
-extras|enemy_count_recruit|toggle|1|
-extras|enemy_count_veteran|toggle|1|
-extras|enemy_count_elite|toggle|1|
-extras|enemy_count_hero|toggle|1|
-extras|grenade_timer|toggle|1|
+extras|damage_mode|choice|0|0,1
+cheats|unlock_all|toggle|0|
+cheats|cheat_ammo|toggle|0|
+cheats|cheat_god|toggle|0|
+cheats|cheat_noshock|toggle|0|
+cheats|super_accuracy|toggle|0|
+cheats|friends_mode|choice|0|0,1,2
+hud|cheat_nohud|toggle|0|
+hud|hide_crosshair|toggle|1|
+hud|hit_marker|toggle|1|
+hud|grenade_timer|toggle|1|
+hud|stamina_bar|toggle|1|
+hud|hud_hide_compass|toggle|0|
+hud|hud_hide_healthring|toggle|0|
+hud|hud_hide_medkit|toggle|0|
+hud|hud_hide_revive|toggle|0|
+hud|hud_hide_stance|toggle|0|
+hud|hud_hide_ammo|toggle|0|
+hud|hud_hide_grenade|toggle|0|
+hud|hud_hide_rally|toggle|0|
+hud|hud_hide_overheat|toggle|0|
+hud|hud_hide_stopwatch|toggle|0|
+hud|hud_hide_democharge|toggle|0|
+hud|hud_hide_hitdir|toggle|0|
+hud|hud_hide_hints|toggle|0|
+hud|hud_hide_outofammo|toggle|0|
+hud|hud_hide_squadcmd|toggle|0|
+hud|hud_hide_nemesis|toggle|0|
+hud|hud_hide_leveltimer|toggle|0|
+hud|hud_hide_beads|toggle|0|
+extras|weapon_light|choice|2|0,1,2,3,4
+extras|auto_switch|choice|0|0,1,2
+extras|pain_sounds|toggle|1|
+extras|breath_sounds|toggle|1|
+extras|scope_sway|toggle|1|
+extras|gun_sway|toggle|1|
+extras|pain_volume|choice|80|10,20,30,40,50,60,70,80,90,100|pain_sounds
+extras|breath_volume|choice|70|10,20,30,40,50,60,70,80,90,100|breath_sounds
+extras|scope_sway_strength|choice|3|1,2,3,4,5|scope_sway
+extras|gun_sway_strength|choice|3|1,2,3,4,5|gun_sway
 recomp|pin_game|choice|2|0,1,2,3,4,5,6
 recomp|audio_host|toggle|0|
 recomp|check_updates|toggle|1|

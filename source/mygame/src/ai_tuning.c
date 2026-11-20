@@ -20,6 +20,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <math.h>
 
 extern ptrdiff_t g_xbox_mem_offset;
 
@@ -224,6 +225,275 @@ void game_ai_probe(uint32_t id, uint32_t ret, uint32_t self)
             fclose(f);
         }
     }
+}
+
+/* ============================================================
+ * Damage mode (Recomp Settings "Damage mode": Normal / Low damage) and the hit marker.
+ *
+ * What the game does (read from the generated code, not guessed): a soldier's health lives in a "meter" object at
+ * soldier + 0x2C60 (soldier class vtable 0x317008): +0x98 = maximum, +0x9C = current, +0x88 = 3 once it reached zero.
+ * Every change of that value goes through sub_00016BE0(this = meter, float delta); a hit is a negative delta. The hook
+ * line in recomp_0000.c (marker DMG-MODE) calls game_meter_add before the add, and this code may rewrite the delta:
+ *   Normal      nothing changes (a Damage line in mods\weapons\<Name>.txt works).
+ *               Low damage ignores such a Damage line: the hit count is fixed, whatever the file says.
+ *   Low damage  the bullet that hit is known from game_hit_confirm (ballistics row = bullet + 0x174; row +0 = the weapon's
+ *               id, row +8 = base damage). Light guns (pistols, SMGs, MGs): 7 hits to kill, 3 for a head shot. Heavy
+ *               single-shot guns (game_weapon_is_heavy: Karabiner, M1, scoped rifles): 2 hits to the body, 1 to the head.
+ *               A head shot = the hit is 3x or more of the row's base damage. A hit with no known bullet (explosions, melee)
+ *               keeps the old size buckets (dm_hits).
+ * The player's health is a plain float at player + 0x3B0 and does not go through the meter, so Low damage does not touch
+ * him. Friendly soldiers share the soldier class and follow the same rule.
+ * Hit marker: sub_000FB7C0 (a soldier is hit by a bullet) calls game_hit_confirm once the ray test says the bullet is
+ * inside the hit volume (hook marker HIT-MARK); the shooter is bullet + 0x180. game_hitmark_poll (once per frame, from
+ * the sprint hook) then looks at the victim's meter: dead -> red X, alive -> white X, both drawn by nv2a_gpu_hud_hitmark.
+ * ============================================================ */
+extern void nv2a_gpu_hud_hitmark(int kind);
+uint32_t game_pc_get(void);
+int recomp_menu_up(void);
+
+int game_weapon_is_heavy(uint32_t row_id, char *name_out, size_t name_sz);     /* recomp_manual.c */
+void game_pain_event(uint32_t victim, int death);                               /* game_sfx.c */
+void game_pain_poll(void);
+
+static int s_dm = -1;                   /* 0 Normal, 1 Low damage; -1 = not read yet */
+static int s_hm = -1;                   /* hit marker on/off */
+
+static void dm_init(void)
+{
+    const char *e;
+    if (s_dm >= 0)
+        return;
+    s_dm = 0;
+    e = getenv("RECOMP_DAMAGE_MODE");
+    if (e && e[0] && e[0] != '0' && e[0] != 'n' && e[0] != 'N')       /* old ini values 1 (Realism, removed) and 2 mean Low damage */
+        s_dm = 1;
+    e = getenv("RECOMP_HIT_MARKER");
+    s_hm = !(e && e[0] == '0');
+}
+int  game_dmgmode_get(void)      { dm_init(); return s_dm; }
+void game_dmgmode_set(int m)     { dm_init(); s_dm = m > 0 ? 1 : 0; }
+int  game_hitmark_get(void)      { dm_init(); return s_hm; }
+void game_hitmark_set(int on)    { dm_init(); s_hm = on ? 1 : 0; }
+
+/* Unlock all missions: sub_001764B0 (LOADVARLEVELSCOMPLETEDINFO) hands the mission-select UI one "campaign_mission_completed"
+ * record per profile entry (profile + 0x610, stride 0x50, completed = bit 0 of the byte at +0xC); the hook line in recomp_0043.c
+ * (marker UNLOCK-ALL) makes it 1 for every valid entry while this is on. The save file itself is not touched. */
+static int s_unlock = -1;
+int  game_unlock_get(void)
+{
+    if (s_unlock < 0) {
+        const char *e = getenv("RECOMP_UNLOCK_ALL");
+        s_unlock = e && e[0] == '1';
+    }
+    return s_unlock;
+}
+void game_unlock_set(int on)     { s_unlock = on ? 1 : 0; }
+
+/* guest memory reads that never fault (a bad pointer gives 0) */
+static int dm_rd(uint32_t va, uint32_t *out)
+{
+    __try {
+        *out = *(volatile uint32_t *)((uintptr_t)va + g_xbox_mem_offset);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+    return 1;
+}
+static int dm_rdf(uint32_t va, float *out)
+{
+    uint32_t w;
+    if (!dm_rd(va, &w))
+        return 0;
+    memcpy(out, &w, 4);
+    return 1;
+}
+
+/* hits a soldier of this maximum health may take when the bullet is not known, by the size of the hit
+ * (24-26 light guns, 50 heavy, x5 head, bigger = explosions) */
+static float dm_hits(float a)
+{
+    if (a <= 30.0f) return 7.0f;
+    if (a <= 60.0f) return 5.0f;
+    if (a <= 130.0f) return 3.0f;
+    return 2.0f;
+}
+
+/* the bullets that reached a soldier (game_hit_confirm runs before the damage is applied), newest last */
+static struct { uint32_t meter; DWORD t; float base; int heavy; } s_blt[8];
+static int s_blt_n;
+
+static int dm_bullet_for(uint32_t meter, float *base, int *heavy)
+{
+    int i;
+    DWORD now = GetTickCount();
+    for (i = s_blt_n - 1; i >= 0 && i >= s_blt_n - 8; i--) {
+        int k = i & 7;
+        if (s_blt[k].meter == meter && (int)(now - s_blt[k].t) < 500) {
+            *base = s_blt[k].base;
+            *heavy = s_blt[k].heavy;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void dm_note_bullet(uint32_t victim, uint32_t bullet)
+{
+    uint32_t row = 0, id = 0;
+    float base = 0.0f, range = 0.0f;
+    char nm[32] = "";
+    int heavy;
+    static int logged;
+
+    if (!dm_rd(bullet + 0x174u, &row) || !dm_rd(row, &id) || !dm_rdf(row + 8u, &base) || !dm_rdf(row + 0x14u, &range))
+        return;
+    heavy = game_weapon_is_heavy(id, nm, sizeof nm) || range >= 200.0f;     /* range 239.76 = the Karabiner's row */
+    s_blt[s_blt_n & 7].meter = victim + 0x2C60u;
+    s_blt[s_blt_n & 7].t = GetTickCount();
+    s_blt[s_blt_n & 7].base = base;
+    s_blt[s_blt_n & 7].heavy = heavy;
+    s_blt_n++;
+    if (logged < 30) {
+        logged++;
+        fprintf(stderr, "[DMGMODE] bullet row %08X id %08X weapon '%s' damage %g range %g -> %s\n", row, id, nm,
+                (double)base, (double)range, heavy ? "heavy" : "light");
+    }
+}
+
+void game_meter_add(uint32_t meter, uint32_t sp)
+{
+    float d, mx, cur, a, share, nd, base = 0.0f;
+    uint32_t vt;
+    int heavy = 0, known, head = 0;
+    static int logged;
+
+    if (s_dm < 0)
+        dm_init();
+    if (!dm_rdf(sp + 4u, &d) || !(d < -0.0001f))
+        return;
+    if (meter < 0x80002C60u || meter >= 0x84000000u)
+        return;
+    if (!dm_rd(meter - 0x2C60u, &vt) || vt != 0x317008u)        /* not a soldier's meter */
+        return;
+    if (!dm_rdf(meter + 0x98u, &mx) || !dm_rdf(meter + 0x9Cu, &cur) || !(mx > 1.0f) || !(mx < 100000.0f))
+        return;
+    a = -d;
+    nd = d;
+    known = dm_bullet_for(meter, &base, &heavy);
+    if (s_dm) {
+        if (known && base > 0.01f) {
+            head = a >= base * 3.0f;                    /* a head shot is 5x the row's damage */
+            if (heavy)
+                nd = head ? -(mx * 1.001f) : -(mx * 0.5005f);     /* 1 hit in the head, 2 in the body */
+            else {
+                share = mx / (head ? 3.0f : 7.0f) * 1.001f;       /* 3 hits in the head, 7 in the body */
+                nd = -share;        /* always this size: a Damage line in mods\weapons is ignored while Low damage is on */
+            }
+        } else {
+            share = mx / dm_hits(a) * 1.001f;
+            if (a > share)
+                nd = -share;
+        }
+        if (nd != d) {
+            uint32_t w;
+            memcpy(&w, &nd, 4);
+            __try {
+                *(volatile uint32_t *)((uintptr_t)(sp + 4u) + g_xbox_mem_offset) = w;
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                return;
+            }
+        }
+    }
+    {   /* PAIN SOUNDS (game_sfx.c): the final hit size decides pain or scream; a soldier who is already down makes no sound */
+        uint32_t st = 0;
+        if (cur > 0.0f && !(dm_rd(meter + 0x88u, &st) && st == 3u))
+            game_pain_event(meter - 0x2C60u, cur + nd <= 0.0f);
+    }
+    if (logged < 40) {
+        logged++;
+        fprintf(stderr, "[DMGMODE] soldier meter %08X health %g of %g, hit %g -> %g (mode %d, %s%s)\n",
+                meter, (double)cur, (double)mx, (double)a, (double)-nd, s_dm,
+                known ? (heavy ? "heavy" : "light") : "no bullet", head ? " head" : "");
+    }
+}
+
+static struct { uint32_t meter; DWORD t; float before; } s_pend[4];
+static int s_npend;
+
+void game_hit_confirm(uint32_t victim, uint32_t bullet)
+{
+    uint32_t shooter = 0, alt = 0, st = 0, pc = game_pc_get();
+    float cur = 1.0f;
+    static int logged_mine, logged_other;
+    int mine;
+
+    if (s_dm < 0)
+        dm_init();
+    if (s_dm)
+        dm_note_bullet(victim, bullet);
+    if (!s_hm)
+        return;
+    if (!dm_rd(bullet + 0x180u, &shooter))
+        return;
+    mine = pc && (uint32_t)(shooter - pc) < 0x400u;
+    /* every line carries both owner candidates; other shooters are only logged when they sit near the player object, so a
+     * wrong window shows up in one run instead of being hidden behind the first 12 enemy shots */
+    if (mine ? logged_mine < 12 : (logged_other < 12 && pc && (uint32_t)(shooter - pc + 0x10000u) < 0x20000u)) {
+        dm_rd(bullet + 0xE0u, &alt);
+        fprintf(stderr, "[HITMARK] victim %08X shooter %08X (+0xE0 %08X) player %08X diff %d -> %s\n", victim, shooter, alt,
+                pc, (int)(shooter - pc), mine ? "player's shot" : "not the player's");
+        if (mine) logged_mine++; else logged_other++;
+    }
+    if (!mine || victim == pc)
+        return;
+    if (dm_rd(victim + 0x2C60u + 0x88u, &st) && st == 3u)         /* already dead */
+        return;
+    if (dm_rdf(victim + 0x2C60u + 0x9Cu, &cur) && cur <= 0.0f)
+        return;
+    if (s_npend < 4) {
+        s_pend[s_npend].meter = victim + 0x2C60u;
+        s_pend[s_npend].t = GetTickCount();
+        s_pend[s_npend].before = cur;
+        s_npend++;
+    }
+}
+
+/* once per frame: shows the marker for the hits recorded at least 10 ms ago (the damage has been applied by then) */
+void game_hitmark_poll(void)
+{
+    int i, j, kind = 0;
+    DWORD now;
+    static int logged;
+
+    game_pain_poll();                                   /* pain / scream sounds and the player's health (game_sfx.c) */
+    if (!s_npend)
+        return;
+    now = GetTickCount();
+    for (i = j = 0; i < s_npend; i++) {
+        uint32_t st = 0;
+        float cur = 1.0f, mx = 0.0f;
+        if ((int)(now - s_pend[i].t) < 10) {
+            s_pend[j++] = s_pend[i];
+            continue;
+        }
+        dm_rd(s_pend[i].meter + 0x88u, &st);
+        dm_rdf(s_pend[i].meter + 0x9Cu, &cur);
+        dm_rdf(s_pend[i].meter + 0x98u, &mx);
+        /* a hit that did no damage (the game's own gates drop some) shows nothing: red = dead, white = health went down */
+        if (logged < 20) {
+            logged++;
+            fprintf(stderr, "[HITMARK] resolve meter %08X health %g -> %g (max %g, state %u) -> %s\n", s_pend[i].meter,
+                    (double)s_pend[i].before, (double)cur, (double)mx, st,
+                    (st == 3u || cur <= 0.0f) ? "red X" : cur < s_pend[i].before - 0.001f ? "white X" : "no marker");
+        }
+        if (st == 3u || cur <= 0.0f)
+            kind = 2;
+        else if (cur < s_pend[i].before - 0.001f && !kind)
+            kind = 1;
+    }
+    s_npend = j;
+    if (kind && !recomp_menu_up())
+        nv2a_gpu_hud_hitmark(kind);
 }
 
 void game_ai_tuning_loaded(void)
@@ -475,6 +745,160 @@ static double ec_factor(void)
     return k > 5.0 ? 5.0 : k;
 }
 
+/* Spawners: which team each spawner def (def+8, the getters' ecx) belongs to. sub_00038B70 reads the spawner def's Team at
+ * 0x38C2A (1 = friends, 2 = enemies); that hook calls game_spawner_team. Enemy count only touches Team 2. */
+static uint32_t s_defctx;
+static struct { uint32_t def8; int team; int skip; } s_spt[256];
+static unsigned s_spn;
+void game_def_ctx(uint32_t c) { s_defctx = c; }
+static int spawner_team(uint32_t def8)
+{
+    unsigned i;
+    for (i = 0; i < s_spn; i++)
+        if (s_spt[i].def8 == def8)
+            return s_spt[i].skip ? -1 : s_spt[i].team;
+    return 0;
+}
+static int spt_slot(uint32_t def8)
+{
+    unsigned i;
+    for (i = 0; i < s_spn; i++)
+        if (s_spt[i].def8 == def8)
+            return (int)i;
+    if (s_spn >= 256)
+        return -1;
+    s_spt[s_spn].def8 = def8;
+    s_spt[s_spn].team = 0;
+    s_spt[s_spn].skip = 0;
+    return (int)s_spn++;
+}
+
+/* IN-GAME EDITOR (game_patches.c): the spawner's team (2 = enemies, -1 = leader, 0 unknown) and a one-spawner "one more may be alive"
+ * window: while the boost runs, MaxAlive reads of that spawner's def return one more, so a pool of +1 really makes a soldier. */
+static uint32_t s_ed_boost_def8;
+static int s_ed_boost_left;
+static uint32_t ed_def8(uint32_t spawner)
+{
+    uint32_t h = *(volatile uint32_t *)((uintptr_t)spawner + 0xCu + g_xbox_mem_offset);
+    if (h < 0x80000000u || h >= 0x84000000u)
+        return 0;
+    return *(volatile uint32_t *)((uintptr_t)h + 4u + g_xbox_mem_offset) + 8u;
+}
+int game_editor_spawner_team(uint32_t spawner)
+{
+    uint32_t d = ed_def8(spawner);
+    return d ? spawner_team(d) : 0;
+}
+void game_editor_boost(uint32_t spawner, int reads)
+{
+    s_ed_boost_def8 = ed_def8(spawner);
+    s_ed_boost_left = reads;
+}
+
+/* Leaders (officers, commanders, captains ...) must not be multiplied. The soldier type a spawner makes is a name string read in
+ * sub_000A1470 at 0x000A157F (hook game_spawner_name); a name containing one of these words, or a line of
+ * mods\ai\enemycount_skip.txt (one word per line, any case), marks the spawner as skipped. Every new type name is logged. */
+static const char *const k_leader_words[] = { "offic", "leader", "command", "captain", "capt", "lieut", "sergeant", "sgt", "boss", "chief", "colonel", "major", "hauptmann", "kommandant", "ldr", "cmdr", "marshal", "nemesis", "general", "engle", "schrader", "partisanleader", NULL };
+static char s_skip_words[16][32];
+static int s_skip_n = -1;
+static void skip_words_load(void)
+{
+    FILE *f;
+    char line[128];
+    s_skip_n = 0;
+    f = fopen("mods\\ai\\enemycount_skip.txt", "r");
+    if (!f)
+        return;
+    while (s_skip_n < 16 && fgets(line, sizeof line, f)) {
+        size_t n = strlen(line);
+        while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '))
+            line[--n] = 0;
+        if (n && line[0] != '#') {
+            strncpy(s_skip_words[s_skip_n], line, 31);
+            s_skip_words[s_skip_n][31] = 0;
+            s_skip_n++;
+        }
+    }
+    fclose(f);
+}
+static int name_has(const char *low, const char *w)
+{
+    char lw[32];
+    size_t i;
+    for (i = 0; w[i] && i < 31; i++)
+        lw[i] = (char)((w[i] >= 'A' && w[i] <= 'Z') ? w[i] + 32 : w[i]);
+    lw[i] = 0;
+    return lw[0] && strstr(low, lw) != NULL;
+}
+void game_spawner_name(uint32_t spawner, uint32_t str)
+{
+    char nm[256], low[256];
+    int i, skip = 0, slot;
+    uint32_t def8, h;
+    if (spawner < 0x80000000u || spawner >= 0x84000000u || str < 0x10000u)
+        return;
+    h = *(volatile uint32_t *)((uintptr_t)spawner + 0xCu + g_xbox_mem_offset);
+    if (h < 0x80000000u || h >= 0x84000000u)
+        return;
+    def8 = *(volatile uint32_t *)((uintptr_t)h + 4u + g_xbox_mem_offset) + 8u;
+    for (i = 0; i < 255; i++) {
+        nm[i] = *(volatile char *)((uintptr_t)str + (uintptr_t)i + g_xbox_mem_offset);
+        if (!nm[i])
+            break;
+        low[i] = (char)((nm[i] >= 'A' && nm[i] <= 'Z') ? nm[i] + 32 : nm[i]);
+    }
+    nm[i] = 0;
+    low[i] = 0;
+    if (!nm[0])
+        return;
+    game_editor_spawner_named(spawner, nm);                 /* map editor: which type file this spawner makes */
+    if (s_skip_n < 0)
+        skip_words_load();
+    {   /* match the file name only (after the last backslash), not the folders */
+        const char *bs = strrchr(low, 92);
+        if (bs)
+            memmove(low, bs + 1, strlen(bs + 1) + 1);
+    }
+    for (i = 0; k_leader_words[i]; i++)
+        if (name_has(low, k_leader_words[i]))
+            skip = 1;
+    for (i = 0; i < s_skip_n; i++)
+        if (name_has(low, s_skip_words[i]))
+            skip = 1;
+    slot = spt_slot(def8);
+    if (slot < 0)
+        return;
+    if (s_spt[slot].skip != skip || !s_spt[slot].team) {
+        static int said;
+        if (said++ < 80)
+            fprintf(stderr, "[ENEMYCOUNT] spawner type '%s' -> %s\n", nm, skip ? "leader, NOT multiplied" : "normal");
+    }
+    s_spt[slot].skip = skip;
+}
+void game_spawner_team(uint32_t spawner, uint32_t def8, uint32_t team)
+{
+    int i = spt_slot(def8);
+    if (i < 0)
+        return;
+    s_spt[i].def8 = def8;
+    s_spt[i].team = (int)team;
+    ec_menu_init();
+    if (team == 2 && !s_spt[i].skip && (s_ec_set || s_menu_k != 1) && spawner >= 0x80000000u && spawner < 0x84000000u &&
+        *(volatile uint32_t *)((uintptr_t)spawner + 0x40u + g_xbox_mem_offset) == 0u) {
+        double k = ec_factor();
+        uint32_t pool = *(volatile uint32_t *)((uintptr_t)spawner + 0x48u + g_xbox_mem_offset);
+        if (k > 1.0001 && (int32_t)pool > 0 && pool < 1000u) {
+            uint32_t np = (uint32_t)(int)(k * (double)pool + 0.999);
+            *(volatile uint32_t *)((uintptr_t)spawner + 0x48u + g_xbox_mem_offset) = np;
+            {
+                static int said;
+                if (said++ < 30)
+                    fprintf(stderr, "[ENEMYCOUNT] enemy spawner %08X pool %u -> %u (x%g)\n", spawner, pool, np, k);
+            }
+        }
+    }
+}
+
 uint32_t game_def_i(uint32_t v, uint32_t hash, uint32_t ret)
 {
     double nv;
@@ -485,15 +909,19 @@ uint32_t game_def_i(uint32_t v, uint32_t hash, uint32_t ret)
         def_init();
     if (!h_maxalive)
         h_maxalive = ait_crc32_impl("MaxAlive");
-    /* spawner total pool: sub_000A0F40 sets obj+0x48 = random(0x8AB12380, 0xB6BC1CD9) (both ints, callers A0F67/A0F7C) */
-    if ((s_ec_set || s_menu_k != 1) && (hash == h_maxalive || ((hash == 0x8AB12380u && ret == 0x000A0F67u) || (hash == 0xB6BC1CD9u && ret == 0x000A0F7Cu))) && (int32_t)v > 0) {
+    if (s_ed_boost_left > 0 && hash == h_maxalive && s_defctx == s_ed_boost_def8) {   /* editor: the one spawner asked to make one more */
+        s_ed_boost_left--;
+        v += 1u;
+    }
+    /* MaxAlive only for spawners whose Team is 2 (enemies); the total pool is scaled in game_spawner_team */
+    if ((s_ec_set || s_menu_k != 1) && hash == h_maxalive && (int32_t)v > 0 && spawner_team(s_defctx) == 2) {
         double k = ec_factor();
         if (k > 1.0001) {
             uint32_t nvv = (uint32_t)(int)(k * (double)(int32_t)v + 0.999);
             {
                 static int said;
                 if (said++ < 30)
-                    fprintf(stderr, "[ENEMYCOUNT] hash %08X %d -> %u (x%g, caller %08X)\n", hash, (int)v, nvv, k, ret);
+                    fprintf(stderr, "[ENEMYCOUNT] MaxAlive %d -> %u (x%g, caller %08X, enemy spawner)\n", (int)v, nvv, k, ret);
             }
             v = nvv;
         }
@@ -503,4 +931,75 @@ uint32_t game_def_i(uint32_t v, uint32_t hash, uint32_t ret)
     if (s_df_n && def_find(ret, hash, &nv, &mul))
         return (uint32_t)(int)(mul ? (double)(int32_t)v * nv + 0.5 : nv + 0.5);
     return v;
+}
+
+/* FRIENDS mode (Recomp Settings row "Squad mates"): 0 Normal, 1 Tough, 2 Weak. A friend = a soldier-class object (vtable 0x317008)
+ * whose team code at obj+0xD8 is 6 (measured with RECOMP_TEAM_PROBE, 2026-11-18: 6 = squad mates, 3 = enemies).
+ *  - game_friend_dmg(proj): called from the projectile damage getter sub_00185120 (recomp_0044.c, marked FRIENDS); owner of a
+ *    projectile = proj+0x180. Returns the damage multiplier (Tough x3, Weak x0.4, else 1).
+ *  - game_friend_aim(owner, dir): called from game_proj_fix at bullet creation; Weak adds a random sideways / vertical error
+ *    (about 5 degrees) to the bullet direction. ini friends_mode, env RECOMP_FRIENDS. */
+static int s_friends = -1;
+static int friends_mode(void)
+{
+    if (s_friends < 0) {
+        const char *e = getenv("RECOMP_FRIENDS");
+        s_friends = e && e[0] ? atoi(e) : 0;
+        if (s_friends < 0 || s_friends > 2) s_friends = 0;
+    }
+    return s_friends;
+}
+int game_friends_get(void)       { return friends_mode(); }
+void game_friends_set(int m)     { s_friends = m < 0 || m > 2 ? 0 : m; }
+
+static int is_friend(uint32_t o)
+{
+    if (!((o >= 0x80000000u && o < 0x84000000u)))
+        return 0;
+    return *(volatile uint32_t *)((uintptr_t)o + g_xbox_mem_offset) == 0x317008u &&
+           *(volatile uint32_t *)((uintptr_t)o + 0xD8u + g_xbox_mem_offset) == 6u;
+}
+
+float game_friend_dmg(uint32_t proj)
+{
+    int m = friends_mode();
+    uint32_t owner;
+    float k;
+    if (!m || proj < 0x80000000u || proj >= 0x84000000u)
+        return 1.0f;
+    owner = *(volatile uint32_t *)((uintptr_t)proj + 0x180u + g_xbox_mem_offset);
+    if (!is_friend(owner))
+        return 1.0f;
+    k = m == 1 ? 3.0f : 0.4f;
+    {
+        static int said;
+        if (said++ < 12)
+            fprintf(stderr, "[FRIENDS] mode %d: friend %08X damage x%g\n", m, owner, (double)k);
+    }
+    return k;
+}
+
+static uint32_t s_fr_rng = 0x1234567u;
+static float fr_rand(void)                 /* -1..1 */
+{
+    s_fr_rng ^= s_fr_rng << 13; s_fr_rng ^= s_fr_rng >> 17; s_fr_rng ^= s_fr_rng << 5;
+    return (float)(s_fr_rng & 0xFFFFu) / 32767.5f - 1.0f;
+}
+
+void game_friend_aim(uint32_t owner, uint32_t dir)
+{
+    float d[3];
+    float len;
+    int i;
+    if (friends_mode() != 2 || dir < 0x1000u || !is_friend(owner))
+        return;
+    for (i = 0; i < 3; i++)
+        memcpy(&d[i], (const void *)((uintptr_t)dir + 4u * (uintptr_t)i + g_xbox_mem_offset), 4);
+    len = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (len < 0.01f)
+        return;
+    for (i = 0; i < 3; i++) {
+        d[i] += fr_rand() * 0.09f * len;           /* about 5 degrees each axis */
+        memcpy((void *)((uintptr_t)dir + 4u * (uintptr_t)i + g_xbox_mem_offset), &d[i], 4);
+    }
 }

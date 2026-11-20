@@ -257,6 +257,20 @@ void game_patch_000137C0(void)
             && MEMF(0x3727C8) > 0.001f)
             MEMF(slot) = MEMF(slot) / (float)fps / MEMF(0x3727C8);
     }
+    {   /* FREECAM with the world frozen: the frame time the caller multiplies in is cut to almost nothing, so the game's
+         * clock, physics, AI and scripts stand still while the camera flies (the same caller copy as above, any frame rate) */
+        extern int game_freecam_frozen(void);
+        uint32_t off = 0xFFFFFFFFu, slot;
+        if (game_freecam_frozen()) {
+            switch (MEM32(esp)) {
+            case 0x000804F3u: case 0x00080B7Cu: off = 0; break;
+            case 0x0008073Bu: case 0x000809BEu: case 0x000817B2u: off = 0xC; break;
+            }
+            slot = esp + 4 + off;
+            if (off != 0xFFFFFFFFu && MEMF(slot) > 0.0f && MEMF(slot) < 100.0f)
+                MEMF(slot) = MEMF(slot) * 0.0002f;
+        }
+    }
 
 loc_000137C0: ;
     SET_LO8(eax, MEM8(0x38DC70));
@@ -694,6 +708,7 @@ static void corpse_watch_add(uint32_t obj, uint32_t cmd)
 }
 
 static void lod_dead_keys(void);
+void game_holders_poll(void);
 void game_corpse_watch_poll(void)
 {
     static int down;
@@ -701,6 +716,7 @@ void game_corpse_watch_poll(void)
     static uint32_t seen[64];
     static int nseen;
     int i, k;
+    game_holders_poll();
     if (s_keep_release) {                    /* "Keep corpses" switched off: every kept body gets its delete command now */
         s_keep_release = 0;
         for (i = 0; i < s_nkept; i++)
@@ -812,7 +828,7 @@ uint32_t game_playback_pool_bytes(void)
     static uint32_t bytes;
     if (!bytes) {
         const char *e = getenv("RECOMP_PLAYBACK_POOL");
-        int k = e ? atoi(e) : 1;
+        int k = e ? atoi(e) : (keep_init(), s_keep_mask ? 4 : 1);   /* 2026-11-17 log: 200 POOLFULL (196 of 196 tasks) with kept bodies, new soldiers starved = frozen */
         if (k < 1)
             k = 1;
         if (k > 64)
@@ -862,13 +878,351 @@ void game_pool_full(uint32_t pool, uint32_t req)
     }
 }
 
+/* RECOMP_SCHED_TRACE=1 (diagnostic): every command put on the game's delayed-command list (sub_0012F1C0: command, ticks)
+ * with the command's class (vtable at +0, its first virtual), the object handle at +0x18 and its class, and the caller.
+ * Used to find which delayed commands remove thrown helmets / dropped weapons. */
+void game_sched_trace(uint32_t sp)
+{
+    static int on = -1;
+    static unsigned n;
+    uint32_t cmd, ticks, ret, h, vt = 0, ovt = 0, i;
+    char stk[160];
+    int len = 0;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_SCHED_TRACE");
+        on = e && *e == '1';
+    }
+    static struct { uint32_t vt, ovt, caller, cnt; } keys[128];
+    static int nkeys;
+    static DWORD last_sum;
+    int k;
+    if (!on)
+        return;
+    ret = MEM32(sp);
+    cmd = MEM32(sp + 4);
+    ticks = MEM32(sp + 8);
+    if (cmd >= 0x10000u && cmd < 0x90000000u)
+        vt = MEM32(cmd);
+    h = (cmd >= 0x10000u && cmd < 0x90000000u) ? MEM32(cmd + 0x18) : 0;
+    if (h >= 0x10000u && h < 0x90000000u)
+        ovt = MEM32(h);
+    for (i = 2; i < 24 && len < 150; i++) {
+        uint32_t v = MEM32(sp + 4 * i);
+        if (v >= 0x11000u && v < 0x300000u)
+            len += snprintf(stk + len, sizeof stk - (size_t)len, " %05X", (unsigned)v);
+    }
+    stk[len] = 0;
+    /* one line per distinct (command class, object class, caller chain start); counts every few seconds */
+    {
+        uint32_t c1 = 0;
+        for (i = 3; i < 24 && !c1; i++) {
+            uint32_t v = MEM32(sp + 4 * i);
+            if (v >= 0x11000u && v < 0x300000u)
+                c1 = v;
+        }
+        for (k = 0; k < nkeys && !(keys[k].vt == vt && keys[k].ovt == ovt && keys[k].caller == c1); k++) {}
+        if (k == nkeys) {
+            if (nkeys >= 128)
+                return;
+            keys[nkeys].vt = vt;
+            keys[nkeys].ovt = ovt;
+            keys[nkeys].caller = c1;
+            keys[nkeys].cnt = 0;
+            nkeys++;
+            fprintf(stderr, "[SCHED] NEW t=%lu cmd=%08X vt=%08X ticks=%u obj=%08X objvt=%08X ret=%05X stack:%s\n",
+                    (unsigned long)GetTickCount(), (unsigned)cmd, (unsigned)vt, (unsigned)ticks, (unsigned)h, (unsigned)ovt,
+                    (unsigned)ret, stk);
+        }
+        keys[k].cnt++;
+        n++;
+    }
+    if (GetTickCount() - last_sum > 5000) {
+        last_sum = GetTickCount();
+        fprintf(stderr, "[SCHED-SUM] t=%lu total %u:", (unsigned long)last_sum, n);
+        for (k = 0; k < nkeys; k++)
+            fprintf(stderr, " %08X/%08X/%05X=%u", (unsigned)keys[k].vt, (unsigned)keys[k].ovt, (unsigned)keys[k].caller,
+                    (unsigned)keys[k].cnt);
+        fprintf(stderr, "\n");
+    }
+}
+
+/* RECOMP_HOLDERS=1 (diagnostic, corpse research): when the game deletes a soldier the normal way (Keep corpses off), list
+ * every guest dword that points at the soldier BEFORE (the delete command is about to run) and, 400 ms later, which of
+ * those no longer do: the lists / slots the delete clears, among them whatever tells the spawner "this one is dead". */
+#define HOLD_N 160
+#define HOLD_MAX_OBJ 6
+extern int game_scan_holders(uint32_t target, uint32_t skip_lo, uint32_t skip_hi, uint32_t *out, int max);
+static struct { uint32_t obj, due, n, at[HOLD_N]; } s_hold[HOLD_MAX_OBJ];
+static int s_nhold;
+
+static void hold_dump_ctx(const char *tag, uint32_t at)
+{
+    fprintf(stderr, "[HOLD]   %s %08X:", tag, (unsigned)at);
+    {
+        int i;
+        for (i = -6; i <= 6; i++)
+            fprintf(stderr, " %08X", (unsigned)MEM32(at + (uint32_t)(i * 4)));
+    }
+    fprintf(stderr, "\n");
+}
+
+/* While a watched soldier's delete is pending, every block the game frees (hook in gen/recomp_0056.c, the pool free
+ * at loc_001F509F) that holds the soldier pointer in its first 16 dwords is logged with the guest return chain:
+ * these are the group / list nodes the delete removes the soldier from, and the chain says which function does it. */
+int g_free_trace_on;
+
+/* RECOMP_SPAWN_TRACE=1: the spawner's "member removed" handler (sub_000A1200): msg flag at msg+8 == 0 gives the spawn
+ * quota back (+0x40 spawned--, +0x48 remaining++), non-zero counts a kill (+0x44++). Logs who sends it. */
+void game_spawnerrm_trace(uint32_t sp)
+{
+    static int on = -1;
+    static unsigned n;
+    int j;
+    uint32_t a1, a2;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_SPAWN_TRACE");
+        on = e && *e == '1';
+    }
+    if (!on || n++ > 600)
+        return;
+    a1 = MEM32(sp + 4);
+    a2 = MEM32(sp + 8);
+    fprintf(stderr, "[SPAWNERRM] t=%lu ret=%X iface %08X msg %08X: [%08X %08X %08X %08X %08X] spawner(+40/44/48) %u/%u/%u stack:",
+            (unsigned long)GetTickCount(), (unsigned)MEM32(sp), (unsigned)a1, (unsigned)a2,
+            a2 >= 0x10000u ? (unsigned)MEM32(a2) : 0u, a2 >= 0x10000u ? (unsigned)MEM32(a2 + 4) : 0u,
+            a2 >= 0x10000u ? (unsigned)MEM32(a2 + 8) : 0u, a2 >= 0x10000u ? (unsigned)MEM32(a2 + 12) : 0u,
+            a2 >= 0x10000u ? (unsigned)MEM32(a2 + 16) : 0u,
+            a1 ? (unsigned)MEM32(a1 - 8 + 0x40) : 0u, a1 ? (unsigned)MEM32(a1 - 8 + 0x44) : 0u,
+            a1 ? (unsigned)MEM32(a1 - 8 + 0x48) : 0u);
+    for (j = 1; j < 40; j++) {
+        uint32_t v = MEM32(sp + (uint32_t)(j * 4));
+        if (v >= 0x10000u && v < 0x300000u)
+            fprintf(stderr, " %X", (unsigned)v);
+    }
+    fprintf(stderr, "\n");
+}
+
+/* RECOMP_SPAWN_TRACE=1: every spawn REQUEST (sub_000396B0: type, id, name) with the return chain (60 dwords). */
+void game_spawnreq_trace(uint32_t sp)
+{
+    static int on = -1;
+    static unsigned n;
+    int j;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_SPAWN_TRACE");
+        on = e && *e == '1';
+    }
+    if (!on || n++ > 600)
+        return;
+    fprintf(stderr, "[SPAWNREQ] t=%lu ret=%X args %08X %08X %08X stack:", (unsigned long)GetTickCount(),
+            (unsigned)MEM32(sp), (unsigned)MEM32(sp + 4), (unsigned)MEM32(sp + 8), (unsigned)MEM32(sp + 12));
+    for (j = 1; j < 60; j++) {
+        uint32_t v = MEM32(sp + (uint32_t)(j * 4));
+        if (v >= 0x10000u && v < 0x300000u)
+            fprintf(stderr, " %X", (unsigned)v);
+    }
+    fprintf(stderr, "\n");
+}
+
+#include "map_editor.c"                                          /* IN-GAME EDITOR (soldiers placed with the free camera, saved per level) */
+
+/* RECOMP_SPAWN_TRACE=1: every soldier constructor call (sub_000FA290) with the guest return chain: which function
+ * brings a soldier back when the player returns to an area. */
+void game_ctor_trace(uint32_t self, uint32_t sp)
+{
+    static int on = -1;
+    static unsigned n;
+    int j;
+    ed_note_soldier(self);
+    ed_ctor_seen(self);
+    if (on < 0) {
+        const char *e = getenv("RECOMP_SPAWN_TRACE");
+        on = e && *e == '1';
+    }
+    if (!on || n++ > 400)
+        return;
+    fprintf(stderr, "[SPAWN] t=%lu soldier %08X stack:", (unsigned long)GetTickCount(), (unsigned)self);
+    for (j = 0; j < 40; j++) {
+        uint32_t v = MEM32(sp + (uint32_t)(j * 4));
+        if (v >= 0x10000u && v < 0x300000u)
+            fprintf(stderr, " %X", (unsigned)v);
+    }
+    fprintf(stderr, "\n");
+}
+
+void game_free_trace(uint32_t blk, uint32_t sp)
+{
+    int i, k;
+    static unsigned logged;
+    if (blk < 0x10000u || blk >= 0x90000000u)
+        return;
+    for (i = 0; i < s_nhold; i++) {
+        if (!s_hold[i].due)
+            continue;
+        for (k = 0; k < 16; k++)
+            if (MEM32(blk + (uint32_t)(k * 4)) == s_hold[i].obj) {
+                int j;
+                if (logged++ > 600)
+                    return;
+                fprintf(stderr, "[FREETRACE] soldier %08X block %08X +%02X stack:", (unsigned)s_hold[i].obj, (unsigned)blk,
+                        (unsigned)(k * 4));
+                for (j = 0; j < 96; j++) {
+                    uint32_t v = MEM32(sp + (uint32_t)(j * 4));
+                    if (v >= 0x10000u && v < 0x300000u)
+                        fprintf(stderr, " %X", (unsigned)v);
+                }
+                fprintf(stderr, "\n");
+                return;
+            }
+    }
+}
+
+static void hold_before(uint32_t obj)
+{
+    static int on = -1;
+    int i;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_HOLDERS");
+        on = e && *e == '1';
+    }
+    if (!on || s_nhold >= HOLD_MAX_OBJ)
+        return;
+    i = s_nhold++;
+    s_hold[i].obj = obj;
+    s_hold[i].n = (uint32_t)game_scan_holders(obj, obj, obj + 0x3000u, s_hold[i].at, HOLD_N);
+    s_hold[i].due = GetTickCount() + 400u;
+    g_free_trace_on = 1;
+    fprintf(stderr, "[HOLD] soldier %08X before delete: %u holders\n", (unsigned)obj, (unsigned)s_hold[i].n);
+}
+
+void game_holders_poll(void)
+{
+    int i;
+    for (i = 0; i < s_nhold; i++) {
+        uint32_t k, gone = 0;
+        if (!s_hold[i].due || (int32_t)(GetTickCount() - s_hold[i].due) < 0)
+            continue;
+        s_hold[i].due = 0;
+        for (k = 0; k < s_hold[i].n; k++) {
+            uint32_t at = s_hold[i].at[k];
+            if (MEM32(at) != s_hold[i].obj) {
+                gone++;
+                fprintf(stderr, "[HOLD] soldier %08X holder %08X CLEARED (now %08X)\n", (unsigned)s_hold[i].obj, (unsigned)at,
+                        (unsigned)MEM32(at));
+                if (gone <= 24)
+                    hold_dump_ctx("ctx", at);
+            }
+        }
+        fprintf(stderr, "[HOLD] soldier %08X: %u of %u holders cleared by the delete\n", (unsigned)s_hold[i].obj, (unsigned)gone,
+                (unsigned)s_hold[i].n);
+    }
+    {
+        int pending = 0;
+        for (i = 0; i < s_nhold; i++)
+            pending |= s_hold[i].due != 0;
+        g_free_trace_on = pending;
+    }
+}
+
+/* The soldier destructor (sub_000FA5C0, at 0xFA71D) looks its spawn id (soldier+0x1430 / +0x1434) up in the level's
+ * entity record table (registry [0x3C2E30]: count at +0x4B4, 0x14-byte entries from +4, found by sub_00077E80) and sets
+ * the byte at entry+0x11 (sub_00077EF0): the "this one was removed" mark, the likeliest thing that stops the spawner
+ * from making it again. A kept body is destroyed late (area unload / cap) when that no longer works, so set the mark
+ * at the moment the delete is postponed. Setting it twice is harmless. */
+static void keep_mark_record(uint32_t soldier)
+{
+    static unsigned n;
+    uint32_t s_eax = g_eax, s_ecx = g_ecx, s_edx = g_edx, s_ebx = g_ebx, s_esi = g_esi, s_edi = g_edi,
+             s_ebp = g_ebp, s_esp = esp;
+    uint32_t reg = MEM32(0x3C2E30), lo = MEM32(soldier + 0x1430), hi = MEM32(soldier + 0x1434), ent = 0;
+    if (reg >= 0x10000u && reg < 0x90000000u) {
+        g_ecx = reg;
+        PUSH32(esp, hi);
+        PUSH32(esp, lo);
+        PUSH32(esp, 0x00077EA0u);
+        RECOMP_ABI_CALL(0x00077E80u, sub_00077E80);
+        ent = g_eax;
+    }
+    g_eax = s_eax; g_ecx = s_ecx; g_edx = s_edx; g_ebx = s_ebx; g_esi = s_esi; g_edi = s_edi;
+    g_ebp = s_ebp; esp = s_esp;
+    if (n++ < 40)
+        fprintf(stderr, "[KEEPMARK] soldier %08X id %08X:%08X registry %08X entry %08X flags10/11 %02X/%02X\n",
+                (unsigned)soldier, (unsigned)hi, (unsigned)lo, (unsigned)reg, (unsigned)ent,
+                ent ? (unsigned)MEM8(ent + 0x10) : 0u, ent ? (unsigned)MEM8(ent + 0x11) : 0u);
+    if (ent)
+        MEM8(ent + 0x11) = 1;
+}
+
+/* Kept bodies (soldier object pointers). When the player leaves an area the game tells every soldier's spawner
+ * "this member is gone" (msg code 0x16FF1 into sub_000A1200), which gives the spawn quota back (+0x40--, +0x48++) so the
+ * spawner makes a new soldier on return. A killed soldier normally no longer exists by then; a kept body does, so it
+ * would hand its quota back and a dead enemy would come back to life. The filter drops that message for kept bodies. */
+static uint32_t s_kobj[KEEP_MAX];
+static int s_nkobj;
+
+static void kobj_add(uint32_t h)
+{
+    int i;
+    for (i = 0; i < s_nkobj; i++)
+        if (s_kobj[i] == h)
+            return;
+    if (s_nkobj < KEEP_MAX)
+        s_kobj[s_nkobj++] = h;
+}
+
+static void kobj_del(uint32_t h)
+{
+    int i;
+    for (i = 0; i < s_nkobj; i++)
+        if (s_kobj[i] == h) {
+            s_kobj[i] = s_kobj[--s_nkobj];
+            return;
+        }
+}
+
+int game_spawnerrm_filter(uint32_t sp)
+{
+    uint32_t a2 = MEM32(sp + 8), brain, soldier;
+    int i;
+    static unsigned skipped;
+    game_spawnerrm_trace(sp);
+    if (a2 < 0x10000u)
+        return 0;
+    if (game_editor_is_placed(MEM32(a2 + 4) - 0x2760u)) {   /* a map-editor soldier is invisible to the spawner's counts (spawned is restored after each of ours): neither its */
+        static unsigned edrop;                                 /* refund (leaves the area / deleted: would make the spawner respawn its own one) nor its kill (killed++) may reach it */
+        if (edrop++ < 12)
+            fprintf(stderr, "[EDITOR] dropped member message (code %X, reason flag %u) for editor soldier %08X\n", (unsigned)MEM32(a2 + 0xC),
+                    (unsigned)(MEM32(a2 + 8) >= 0x10000u ? MEM32(MEM32(a2 + 8) + 0x18) : 0u), (unsigned)(MEM32(a2 + 4) - 0x2760u));
+        return 1;
+    }
+    if (MEM32(a2 + 0xC) != 0x16FF1u)
+        return 0;
+    brain = MEM32(a2 + 4);
+    soldier = brain - 0x2760u;
+    if (!s_nkobj)
+        return 0;
+    for (i = 0; i < s_nkobj; i++)
+        if (s_kobj[i] == soldier) {
+            if (skipped++ < 60)
+                fprintf(stderr, "[KEEPSPAWNER] dropped quota refund for kept body %08X (%u so far)\n", (unsigned)soldier,
+                        skipped);
+            return 1;
+        }
+    return 0;
+}
+
 int game_keep_corpse_obj(uint32_t cmd)
 {
     uint32_t h, vt = 0;
     extern int game_keep_corpses(int bit);
+    extern int game_editor_deleting(void);
+    if (game_editor_deleting())                 /* the map editor removes a soldier on purpose: no body is kept */
+        return 0;
     h = MEM32(cmd + 0x18);
     if (h >= 0x10000u && h < 0x90000000u)
         vt = MEM32(h);
+    if (vt == 0x317008u && !game_keep_corpses(8))
+        hold_before(h);
     {
         static int on = -1;
         static unsigned n;
@@ -890,6 +1244,7 @@ int game_keep_corpse_obj(uint32_t cmd)
                 fprintf(stderr, "[CWATCH] release cmd=%08X obj=%08X: cap eviction (kept %d)\n", (unsigned)cmd, (unsigned)h,
                         s_nkept);
             s_rel[i] = s_rel[--s_nrel];
+            kobj_del(h);
             return 0;
         }
         if ((i = cmd_find(s_kept, s_nkept, cmd)) >= 0) {        /* its long countdown ran out: delete it */
@@ -898,6 +1253,7 @@ int game_keep_corpse_obj(uint32_t cmd)
                         (unsigned)cmd, (unsigned)h, s_nkept);
             memmove(s_kept + i, s_kept + i + 1, (size_t)(s_nkept - i - 1) * sizeof s_kept[0]);
             s_nkept--;
+            kobj_del(h);
             return 0;
         }
         while (s_nkept >= keep_n) {                              /* make room: the oldest body goes */
@@ -909,12 +1265,13 @@ int game_keep_corpse_obj(uint32_t cmd)
             list_set_ticks(old, 1);
         }
         s_kept[s_nkept++] = cmd;
+        kobj_add(h);
         if (cw_on())
             fprintf(stderr, "[CWATCH] keep cmd=%08X obj=%08X (kept %d of %d) anim pool %u/%u peak %u\n", (unsigned)cmd,
                     (unsigned)h, s_nkept, keep_n, (unsigned)MEM32(0x3A7878 + 0x1C), (unsigned)MEM32(0x3A7878 + 8),
                     (unsigned)MEM32(0x3A7878 + 0x20));
         corpse_watch_add(h, cmd);
-        list_schedule(cmd, 600000000);                          /* (6000 was only ~9 s in the game's tick unit: bodies vanished then);
+        list_schedule(cmd, 600000000);                         /* (6000 was only ~9 s in the game's tick unit: bodies vanished then);
                                                                  * now effectively never, the cap ends it */
         return 1;
     }
@@ -934,8 +1291,45 @@ int game_keep_corpses(int bit)
 #ifdef RECOMP_CALL_PROFILE
 static uint32_t s_prof[0x300000], s_pfirst[0x300000], s_plast[0x300000];
 static volatile uint32_t s_pframe = 1;      /* draw frames so far (game_prof_poll) */
+/* DT-HUNT (RECOMP_DT_HUNT=1, profile build only): find the functions that receive the frame's dt as a float argument
+ * (stack args 0..2 of a direct call). Matches dt in 59.94 Hz frames ([0x373268]) and in seconds (x [0x3727C8]) to 0.1 %.
+ * Logs each (function, arg) once: [DTHUNT] va arg kind. Used to find the Havok world step for the corpse-fling bug. */
+static void dt_hunt(uint32_t va)
+{
+    static int on = -1, nlog;
+    static uint8_t seen[0x300000 / 8][3];
+    uint32_t k;
+    float dtf, dts;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_DT_HUNT");
+        on = e && *e && *e != '0';
+    }
+    if (!on || nlog >= 400 || va >= 0x300000)
+        return;
+    dtf = MEMF(0x373268);
+    dts = dtf * MEMF(0x3727C8);
+    if (!(dtf > 0.05f && dtf < 3.0f))
+        return;
+    for (k = 0; k < 3; k++) {
+        float a = MEMF(g_esp + 4 + 4 * k);
+        int kind = 0;
+        if (a != a)
+            continue;
+        if (a > dtf * 0.999f && a < dtf * 1.001f)
+            kind = 1;
+        else if (a > dts * 0.999f && a < dts * 1.001f)
+            kind = 2;
+        if (kind && !(seen[va >> 3][k] & (1u << (va & 7)))) {
+            seen[va >> 3][k] |= (uint8_t)(1u << (va & 7));
+            nlog++;
+            fprintf(stderr, "[DTHUNT] va %06X arg%u %s %.6f frame %u\n", (unsigned)va, (unsigned)k, kind == 1 ? "frames" : "seconds",
+                    (double)a, (unsigned)g_game_frames);
+        }
+    }
+}
 void recomp_call_profile_hit(uint32_t va)
 {
+    dt_hunt(va);
     if (va < sizeof s_prof / sizeof s_prof[0]) {
         if (!s_prof[va]++)
             s_pfirst[va] = s_pframe;
@@ -1482,7 +1876,10 @@ loc_001AD6E4: ;
  * taking the mouse, the mouse no longer drives the emulated stick. */
 int mkb_native_aim_take(float *yaw, float *pitch);
 extern float game_zoom_scale(void);   /* recomp_manual.c: 1, or the scope zoom factor while zoomed (SCOPE ZOOM) */
+void game_sway_take(float *dyaw, float *dpitch);   /* game_sfx.c: change of the low-health scope wave since the last call */
 
+int  game_freecam_active(void);       /* recomp_manual.c: FREECAM is flying */
+void game_freecam_mouse(float dyaw, float dpitch);
 static float    s_aim_pitch;        /* taken with the yaw, for the pitch step */
 static uint32_t s_aim_this;         /* the character it was taken for */
 
@@ -1511,6 +1908,7 @@ static void aim_log(uint32_t self)
 /* The character the local player controls: the look update runs for it
  * alone (RECOMP_AIM_LOG showed one object), so the yaw step records it. */
 static uint32_t s_player;
+uint32_t game_pan_player(void) { return s_player; }   /* for the PAN TRACE (recomp_manual.c) */
 
 /* Split-screen: more than one character runs the look update. The mouse belongs to player 1 alone. Characters seen in the
  * last second are tracked; player 1 is the highest address among them. With one character
@@ -1548,12 +1946,29 @@ static void aim_inject_yaw(void)
         return;
     s_player = ecx;
     s_aim_pitch = 0.0f;
-    if (!mkb_native_aim_take(&dyaw, &dpitch))
+    if (game_freecam_active()) {        /* FREECAM: the mouse flies the camera, the soldier stays */
+        float fy, fp;
+        extern int game_editor_look_ok(void);
+        if (mkb_native_aim_take(&fy, &fp) && game_editor_look_ok())     /* with the editor window up, only the right button turns the camera */
+            game_freecam_mouse(fy, fp);
         return;
-    {   /* SCOPE ZOOM: the more the scope is zoomed, the slower the mouse turns */
+    }
+    dyaw = dpitch = 0.0f;
+    if (mkb_native_aim_take(&dyaw, &dpitch)) {
+        /* SCOPE ZOOM: the more the scope is zoomed, the slower the mouse turns */
         float zs = game_zoom_scale();
         dyaw *= zs;
         dpitch *= zs;
+    } else {
+        dyaw = dpitch = 0.0f;
+    }
+    {   /* SCOPE SWAY (game_sfx.c): in a scope with low health the aim moves in a slow wave, mouse or pad alike */
+        float sy, sp;
+        game_sway_take(&sy, &sp);
+        dyaw += sy;
+        dpitch += sp;
+        if (dyaw == 0.0f && dpitch == 0.0f)
+            return;
     }
     s_aim_this = ecx;
     s_aim_pitch = dpitch;
@@ -1932,10 +2347,11 @@ loc_00114D0F: ;
  * update runs for (s_player) sprints -- the AI shares this method. */
 int mkb_sprint_query(float *speed, float *secs, float *recover);
 void mkb_sprint_pad_moving(int moving, int tired);   /* ends the pad's toggled sprint */
-extern void recomp_screenfx_bar(float x0, float y0, float x1, float y1, float fill);
+extern void nv2a_gpu_hud_bar(float x, float y, float h, float aspect, float fill);
+extern int recomp_menu_up(void);
 
 /* Stamina bar show/hide (Recomp Settings row "Stamina bar", ini stamina_bar, env RECOMP_STAMINA_BAR; default on).
- * The overlay bar expires 200 ms after the last draw call, so not calling it hides the bar. */
+ * The bar expires 200 ms after the last draw call, so not calling it hides the bar. */
 static int s_stambar = -1;
 int game_stambar_get(void)
 {
@@ -1994,16 +2410,29 @@ static float s_rt_down_t, s_gun_t = -100.0f;   /* clock: fire went down / the la
 static int g_equipped;          /* the grenade control was pressed and no weapon change / throw since */
 static int s_gren_thrown;       /* the spawner has seen the throw */
 
+int game_held_weapon_grenade(void);     /* recomp_manual.c: 1 a grenade is in the player's hands, 0 a gun, -1 not known */
 static void grenade_cd_tick(float dt)
 {
-    if (game_split_mode())
-        return;
     static unsigned dseen, bseen, aseen;
     static int rtprev;
-    int rt = g_recomp_rt_last > 40;
+    static DWORD last_tick;
+    DWORD now_ms = GetTickCount();
+    int rt = g_recomp_rt_last > 40, held, inhand;
+    if (game_split_mode())
+        return;
+    if (!last_tick || now_ms - last_tick > 300) {       /* first frame of a mission, or back from a pause / menu: the press counters
+                                                         * hold presses made in the menus (Enter, Up ...), which are not throws */
+        dseen = g_recomp_dup_press;
+        bseen = g_recomp_b_press;
+        aseen = g_recomp_a_press;
+        rtprev = rt;
+    }
+    last_tick = now_ms;
     if (dt > 0.1f)
         dt = 0.1f;
     s_gt += dt;
+    held = game_held_weapon_grenade();                  /* what is really in the hands; unknown (-1) falls back to the button guess */
+    inhand = held >= 0 ? held : g_equipped;
     if (g_recomp_dup_press != dseen) {                  /* grenade control: the grenade is in hand (pin still in) */
         dseen = g_recomp_dup_press;
         g_equipped = 1;
@@ -2017,20 +2446,23 @@ static void grenade_cd_tick(float dt)
         }
         fprintf(stderr, "[GRENTIMER] t %.2f B pressed (equipped=%d end=%.2f)\n", s_gt, g_equipped, s_gren_end);
     }
-    if (g_recomp_a_press != aseen) {                    /* Action: with the grenade in hand it pulls the pin; the fuse (5 s) starts now */
+    /* Action with a grenade in the hands pulls the pin: the fuse (5 s) starts now. The fire button does NOT arm it: holding
+     * the throw button only raises the grenade with the pin still in (the throw on release), and a quick tap throws at once
+     * (both start the countdown in grenade_cd_spawn, at the throw). */
+    if (g_recomp_a_press != aseen) {
         aseen = g_recomp_a_press;
-        if (g_equipped && s_gren_end <= 0.0f) {
+        if (inhand && s_gren_end <= 0.0f) {
             s_gren_press = s_gt;
             s_gren_end = s_gt + 5.0f;
             s_gren_rel = -1.0f;
             s_gren_thrown = 0;
-            fprintf(stderr, "[GRENTIMER] t %.2f pin pulled (Action with the grenade in hand)\n", s_gt);
+            fprintf(stderr, "[GRENTIMER] t %.2f pin pulled (Action with the grenade in hand, held=%d)\n", s_gt, held);
         }
     }
     if (rtprev && !rt)
         s_gren_rel = s_gt;
     rtprev = rt;
-    s_gren_inhand = g_equipped;
+    s_gren_inhand = inhand;
     if (s_gren_end > 0.0f) {
         float left = s_gren_end - s_gt;
         /* released, no throw seen for 1.5 s: there was no grenade to arm */
@@ -2048,16 +2480,506 @@ static void grenade_cd_tick(float dt)
     }
 }
 
+/* ---- Enemy grenades (Recomp Settings row "Enemy grenades", ini enemy_grenades, env RECOMP_ENEMY_GRENADES; 0 off, 1 low, 2 medium,
+ * 3 high; default off). The game's soldiers never throw (his hide-and-wait test, 2026-11-19: no grenade in 5 minutes), so the
+ * throw is made by us: the projectile spawner sub_00182050 (thiscall, ecx 0x3C2F40, ret 40 = ten arguments) is called with the
+ * Mills definition hash pair DD8CB982/ED497BEA, type 9 and the soldier as owner, exactly the arguments the player's throw logged
+ * ([GRENSPAWN] lines). Who may throw: a soldier (vtable 0x317008) whose bullet, seen by the spawner hook, was aimed at the player
+ * within the last 6 s (so it is alive, hostile and has a line to the player; allies shoot enemies, not the player). The
+ * grenade then flies and explodes by the game's own projectile code. No throw animation: it appears at the soldier's hand. */
+#define EG_N 24
+typedef struct { uint32_t obj; float t, last_throw, pos[3]; } EgShooter;
+static EgShooter s_eg[EG_N];
+static float s_eg_global_last = -1000.0f, s_eg_live_until, s_eg_cd_cur = 5.0f;
+static int s_egren = -1;
+static unsigned s_eg_rand = 12345u;
+static unsigned s_eg_stat[8];           /* 0 allies seen, 1 shots noted, 2 rejected old, 3 rejected dead, 4 rejected cooldown, 5 rejected range, 6 throws */
+static unsigned s_eg_blast_n, s_eg_form;
+static float s_eg_thrown_t = -1000.0f, s_eg_aim[3], s_eg_start[3];
+
+int game_egren_get(void)
+{
+    if (s_egren < 0) {
+        const char *e = getenv("RECOMP_ENEMY_GRENADES");
+        s_egren = e && *e ? atoi(e) : 1;     /* default Low (user's decision 2026-11-21) */
+        if (s_egren < 0 || s_egren > 3)
+            s_egren = 1;
+    }
+    return s_egren;
+}
+void game_egren_set(int m)
+{
+    s_egren = m < 0 ? 0 : m > 3 ? 3 : m;
+}
+
+static float eg_rand01(void)
+{
+    s_eg_rand = s_eg_rand * 1664525u + 1013904223u;
+    return (float)((s_eg_rand >> 8) & 0xFFFFu) / 65535.0f;
+}
+
+static float eg_f(uint32_t va)
+{
+    float f;
+    uint32_t w = MEM32(va);
+    memcpy(&f, &w, 4);
+    return f;
+}
+
+static int eg_guest_ok(uint32_t va)
+{
+    return (va >= 0x10000u && va < 0x04000000u) || (va >= 0x80000000u && va < 0x84000000u);
+}
+
+/* player position: float triple at player+0x90 (found by the aim measurement, 2026-11-04) */
+static int eg_player_pos(float *p)
+{
+    uint32_t pc = game_pc_get();
+    if (pc < 0x80000000u)
+        return 0;
+    p[0] = eg_f(pc + 0x90); p[1] = eg_f(pc + 0x94); p[2] = eg_f(pc + 0x98);
+    return fabsf(p[0]) > 0.001f || fabsf(p[1]) > 0.001f;
+}
+
+static int eg_alive(uint32_t obj)
+{
+    uint32_t meter = obj + 0x2C60u;
+    return MEM32(obj) == 0x317008u && MEM32(obj + 0xD8) == 3u && MEM32(meter + 0x88) != 3u && eg_f(meter + 0x9C) > 0.0f;
+}
+
+/* called by the spawner hook for every projectile: remember soldiers that shoot at the player */
+static void egren_note(uint32_t sp)
+{
+    uint32_t owner = MEM32(sp + 4 + 32), pos = MEM32(sp + 4 + 12), dir = MEM32(sp + 4 + 16);
+    float pp[3], p[3], d[3], t[3], dist, dn, dot;
+    int i, slot = -1;
+    if (game_egren_get() <= 0)
+        return;
+    if (MEM32(sp) == 0x00185A8Bu && s_eg_blast_n < 6 && s_gt - s_eg_thrown_t < 7.0f && s_gt >= s_eg_thrown_t && eg_guest_ok(pos)) {
+        /* an explosion's fragments within 7 s of our throw: where did it go off, and when (range / fuse calibration) */
+        float bx = eg_f(pos), by = eg_f(pos + 4), bz = eg_f(pos + 8);
+        s_eg_blast_n++;
+        fprintf(stderr, "[EGREN] blast %.2f s after the throw at (%.1f %.1f %.1f): %.1f from the aimed point, %.1f from the thrower's start\n",
+                s_gt - s_eg_thrown_t, (double)bx, (double)by, (double)bz,
+                (double)sqrtf((bx - s_eg_aim[0]) * (bx - s_eg_aim[0]) + (by - s_eg_aim[1]) * (by - s_eg_aim[1]) + (bz - s_eg_aim[2]) * (bz - s_eg_aim[2])),
+                (double)sqrtf((bx - s_eg_start[0]) * (bx - s_eg_start[0]) + (by - s_eg_start[1]) * (by - s_eg_start[1])));
+        return;
+    }
+    if (!eg_guest_ok(owner) || !eg_guest_ok(pos) || !eg_guest_ok(dir))
+        return;
+    if (MEM32(owner) != 0x317008u || !eg_player_pos(pp))
+        return;
+    if (MEM32(owner + 0xD8) != 3u) {         /* team 3 = enemies; 6 = squad mates (RECOMP_TEAM_PROBE, 2026-11-18): allies never throw */
+        s_eg_stat[0]++;
+        return;
+    }
+    if (MEM32(sp + 4 + 24) == 9u)            /* a thrown grenade, not a bullet */
+        return;
+    p[0] = eg_f(pos); p[1] = eg_f(pos + 4); p[2] = eg_f(pos + 8);
+    d[0] = eg_f(dir); d[1] = eg_f(dir + 4); d[2] = eg_f(dir + 8);
+    t[0] = pp[0] - p[0]; t[1] = pp[1] - p[1]; t[2] = pp[2] - p[2];
+    dist = sqrtf(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]);
+    dn = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (dist < 3.0f || dist > 60.0f || dn < 0.01f)
+        return;
+    dot = (t[0] * d[0] + t[1] * d[1] + t[2] * d[2]) / (dist * dn);
+    if (dot < 0.94f)                        /* not aimed at the player (within about 20 degrees) */
+        return;
+    for (i = 0; i < EG_N; i++)
+        if (s_eg[i].obj == owner) { slot = i; break; }
+    if (slot < 0) {
+        float oldest = 1e30f;
+        for (i = 0; i < EG_N; i++)
+            if (!s_eg[i].obj) { slot = i; break; }
+            else if (s_eg[i].t < oldest) { oldest = s_eg[i].t; slot = i; }
+        s_eg[slot].obj = owner;
+        s_eg[slot].last_throw = -1000.0f;
+    }
+    s_eg_stat[1]++;
+    s_eg[slot].t = s_gt;
+    s_eg[slot].pos[0] = p[0]; s_eg[slot].pos[1] = p[1]; s_eg[slot].pos[2] = p[2];
+}
+
+/* flight tracker: a few grenades (ours 'A' soldier owner, 'B' soldier+0x30 owner, 'C' player-form owner, the player's own 'P') are
+ * followed at fixed times after the spawn: the position (found by scanning the object for the spawn point), the fuse word
+ * +0xE8 and whether the object still exists. The first sample also dumps the object, so P and A/B/C can be compared word by word. */
+typedef struct { uint32_t obj; float t0; int next; int off; char tag; } EgTrack;
+static EgTrack s_tr[6];
+static const float k_tr_t[10] = { 0.1f, 0.5f, 1.0f, 2.0f, 3.0f, 4.0f, 4.4f, 4.7f, 5.2f, 6.5f };
+static float s_last_spawn_pos[3];       /* start point of the last grenade the spawner saw (set by the spawner hook) */
+static void eg_dump(const char *what, uint32_t base, uint32_t from, uint32_t to);
+
+static void eg_track_add(uint32_t obj, char tag)
+{
+    int i, slot = 0, off = -1;
+    float oldest = 1e30f;
+    uint32_t o;
+    static unsigned nown;
+    if (!obj || (tag != 'P' && nown++ >= 8))
+        return;
+    for (o = 0x40; o < 0x400; o += 4) {
+        float x = eg_f(obj + o), y = eg_f(obj + o + 4), z = eg_f(obj + o + 8);
+        if (fabsf(x - s_last_spawn_pos[0]) < 0.6f && fabsf(y - s_last_spawn_pos[1]) < 0.6f && fabsf(z - s_last_spawn_pos[2]) < 0.6f &&
+            (fabsf(x) > 0.5f || fabsf(y) > 0.5f)) {
+            off = (int)o;
+            break;
+        }
+    }
+    for (i = 0; i < 6; i++)
+        if (!s_tr[i].obj) { slot = i; break; }
+        else if (s_tr[i].t0 < oldest) { oldest = s_tr[i].t0; slot = i; }
+    s_tr[slot].obj = obj;
+    s_tr[slot].t0 = s_gt;
+    s_tr[slot].next = 0;
+    s_tr[slot].off = off;
+    s_tr[slot].tag = tag;
+    fprintf(stderr, "[EGFLY] %c %08X spawned, start (%.1f %.1f %.1f), position word offset %d\n", tag, (unsigned)obj,
+            (double)s_last_spawn_pos[0], (double)s_last_spawn_pos[1], (double)s_last_spawn_pos[2], off);
+}
+
+static void eg_track_tick(void)
+{
+    int i;
+    for (i = 0; i < 6; i++) {
+        EgTrack *r = &s_tr[i];
+        uint32_t vt;
+        if (!r->obj || r->next >= 10 || s_gt - r->t0 < k_tr_t[r->next])
+            continue;
+        vt = eg_guest_ok(r->obj) ? MEM32(r->obj) : 0u;
+        if (r->off >= 0)
+            fprintf(stderr, "[EGFLY] %c %08X t+%.2f vt %08X pos (%.1f %.1f %.1f) fuse %g\n", r->tag, (unsigned)r->obj, (double)(s_gt - r->t0),
+                    (unsigned)vt, (double)eg_f(r->obj + (uint32_t)r->off), (double)eg_f(r->obj + (uint32_t)r->off + 4),
+                    (double)eg_f(r->obj + (uint32_t)r->off + 8), (double)eg_f(r->obj + 0xE8));
+        else
+            fprintf(stderr, "[EGFLY] %c %08X t+%.2f vt %08X (position not found) fuse %g\n", r->tag, (unsigned)r->obj, (double)(s_gt - r->t0),
+                    (unsigned)vt, (double)eg_f(r->obj + 0xE8));
+        r->next++;
+        if (r->next >= 10)
+            r->obj = 0;
+    }
+}
+
+static void eg_dump(const char *what, uint32_t base, uint32_t from, uint32_t to)
+{
+    uint32_t o;
+    if (!eg_guest_ok(base))
+        return;
+    fprintf(stderr, "[EGDUMP] %s %08X +%X..:", what, (unsigned)base, (unsigned)from);
+    for (o = from; o < to; o += 4)
+        fprintf(stderr, " %X", (unsigned)MEM32(base + o));
+    fprintf(stderr, "\n");
+}
+
+/* sub_00189420, right after the projectile spawner returned (hook EGREN-LOG in recomp_0045.c): the fire object (esi) and the new
+ * projectile. The player's grenade (type [fire+0x1E4] == 9) goes through here; what the game does to it afterwards (virtual calls
+ * +0x160 / +0x15C, flags) is what our direct spawn skips. Logged for the first player throws, to compare with [EGREN] objects. */
+void game_post_spawn_log(uint32_t fire, uint32_t proj)
+{
+    static unsigned n9, nb;
+    if (!proj || !eg_guest_ok(fire) || !eg_guest_ok(proj))
+        return;
+    if (MEM32(fire + 0x1E4) == 9u) {
+        uint32_t vt;
+        if (n9++ >= 8)
+            return;
+        vt = MEM32(proj);
+        eg_track_add(proj, 'P');
+        fprintf(stderr, "[EGDUMP] player grenade: fire %08X def %08X proj %08X vtable %08X slots 118:%X 15C:%X 160:%X 178:%X type byte %02X\n",
+                (unsigned)fire, (unsigned)MEM32(fire + 0x1C0), (unsigned)proj, (unsigned)vt, (unsigned)MEM32(vt + 0x118), (unsigned)MEM32(vt + 0x15C),
+                (unsigned)MEM32(vt + 0x160), (unsigned)MEM32(vt + 0x178), (unsigned)MEM8(MEM32(fire + 0x1C0) + 0x40));
+        eg_dump("fire", fire, 0x1D8, 0x260);
+        eg_dump("proj", proj, 0xE0, 0x230);
+    } else if (nb < 2 && MEM32(fire + 0x254) != 0 && MEM32(MEM32(fire + 0x254)) == 0x317008u) {
+        uint32_t vt = MEM32(proj);
+        nb++;
+        fprintf(stderr, "[EGDUMP] enemy bullet: fire %08X proj %08X vtable %08X slots 15C:%X 160:%X\n", (unsigned)fire, (unsigned)proj, (unsigned)vt,
+                (unsigned)MEM32(vt + 0x15C), (unsigned)MEM32(vt + 0x160));
+        eg_dump("fire", fire, 0x1D8, 0x260);
+    }
+}
+
+/* Grenade definitions the spawner has seen (hash pair, spawn type 9). The game has three: Mills (British, known), Stielhandgranate (German
+ * stick) and Mk2 (American); the pairs of the last two are learned from the first spawn of each in the running level (the player's throw,
+ * or a soldier the game itself made throw, which is marked as faction-correct and preferred). The spawner returns 0 for a definition that
+ * the level has not loaded, so the thrower just tries the next one. */
+typedef struct { uint32_t h1, h2; unsigned n; int by_soldier; } GrenDef;
+/* Pairs read from his 2026-11-19 logs: the first hash is the projectile hash in the weapon entry (+0x124: "Brit" DD8CB982, "Stick" 8517EE6E,
+ * "Frag" 98156AD4); the second hash is the same for all three. Enemies are German, so the stick grenade is the preferred one (by_soldier = 1). */
+static GrenDef s_gdef[6] = { { 0xDD8CB982u, 0xED497BEAu, 0, 0 }, { 0x8517EE6Eu, 0xED497BEAu, 0, 1 }, { 0x98156AD4u, 0xED497BEAu, 0, 0 } };
+static int s_gdef_n = 3;
+static int s_gdef_self;                  /* set while our own throw runs through the spawner hook */
+
+static void grenade_def_learn(uint32_t h1, uint32_t h2, uint32_t owner)
+{
+    int i, soldier = eg_guest_ok(owner) && MEM32(owner) == 0x317008u;
+    for (i = 0; i < s_gdef_n; i++)
+        if (s_gdef[i].h1 == h1 && s_gdef[i].h2 == h2) {
+            if (soldier && !s_gdef[i].by_soldier && !s_gdef_self) {
+                s_gdef[i].by_soldier = 1;
+                fprintf(stderr, "[GRENTYPE] %08X/%08X is thrown by soldiers (faction-correct)\n", (unsigned)h1, (unsigned)h2);
+            }
+            s_gdef[i].n++;
+            return;
+        }
+    if (s_gdef_n >= 6)
+        return;
+    s_gdef[s_gdef_n].h1 = h1; s_gdef[s_gdef_n].h2 = h2; s_gdef[s_gdef_n].n = 1; s_gdef[s_gdef_n].by_soldier = soldier && !s_gdef_self;
+    s_gdef_n++;
+    fprintf(stderr, "[GRENTYPE] new grenade definition %08X/%08X, owner %08X vt %08X (%s), known now %d\n", (unsigned)h1, (unsigned)h2, (unsigned)owner,
+            (unsigned)(owner >= 0x10000u && owner < 0x90000000u ? MEM32(owner) : 0u), soldier ? "soldier" : "player or other", s_gdef_n);
+}
+
+static void egren_throw(EgShooter *e, const float *pp, float dist, int form)
+{
+    static unsigned nlog;
+    uint32_t owner = e->obj;
+    char tag = 'A';
+    uint32_t s_eax = g_eax, s_ecx = g_ecx, s_edx = g_edx, s_ebx = g_ebx, s_esi = g_esi, s_edi = g_edi,
+             s_ebp = g_ebp, s_sehebp = g_seh_ebp, s_esp = esp, base, posb, dirb, obj;
+    RecompXmm s_x[8];
+    double s_fps[8];
+    int s_fpt = g_fp_top, k;
+    float hx = pp[0] - e->pos[0], hy = pp[1] - e->pos[1], hd = sqrtf(hx * hx + hy * hy), elev, power, ce, se, fuse = 5.0f;     /* [5] is 5.0 in every logged player throw; enemy bullets carry their speed here, so it may be the launch speed */
+    float v[8];
+    uint32_t w;
+    if (hd < 0.5f)
+        return;
+    hx /= hd; hy /= hd;
+    (void)form;
+    elev = 0.70f;                                           /* about 40 degrees, like the player's flat-look throws (z 0.68) */
+    power = 0.35f + dist / 40.0f;
+    if (power > 1.0f) power = 1.0f;
+    ce = cosf(elev); se = sinf(elev);
+    s_x[0] = g_xmm0; s_x[1] = g_xmm1; s_x[2] = g_xmm2; s_x[3] = g_xmm3; s_x[4] = g_xmm4; s_x[5] = g_xmm5; s_x[6] = g_xmm6; s_x[7] = g_xmm7;
+    for (k = 0; k < 8; k++)
+        s_fps[k] = g_fp_stack[k];
+    base = (esp - 0x200u) & ~0xFu;
+    posb = base;
+    dirb = base + 0x10u;
+    v[0] = e->pos[0] + hx * 0.4f; v[1] = e->pos[1] + hy * 0.4f; v[2] = e->pos[2] + 0.2f; v[3] = 0.0f;
+    v[4] = ce * hx; v[5] = ce * hy; v[6] = se; v[7] = 0.0f;
+    for (k = 0; k < 4; k++) { memcpy(&w, &v[k], 4); MEM32(posb + 4u * (uint32_t)k) = w; }
+    for (k = 0; k < 4; k++) { memcpy(&w, &v[4 + k], 4); MEM32(dirb + 4u * (uint32_t)k) = w; }
+    esp = base - 0x40u;
+    {
+        int pick = -1, nb = 0, i, tr;
+        uint32_t sv_esp = esp;
+        for (i = 0; i < s_gdef_n; i++)
+            if (s_gdef[i].by_soldier) nb++;
+        if (nb) {                                           /* a soldier-thrown definition is the right one for this level's enemies */
+            int want = (int)(eg_rand01() * (float)nb) % nb;
+            for (i = 0; i < s_gdef_n; i++)
+                if (s_gdef[i].by_soldier && want-- == 0) { pick = i; break; }
+        } else {
+            pick = (int)(eg_rand01() * (float)s_gdef_n) % s_gdef_n;
+        }
+        obj = 0;
+        for (tr = 0; tr < s_gdef_n && !obj; tr++) {
+            int di = (pick + tr) % s_gdef_n;
+            esp = sv_esp;
+            PUSH32(esp, 0xFFFFFFFFu);                       /* [9] */
+            PUSH32(esp, owner);                             /* [8] owner: the soldier */
+            memcpy(&w, &power, 4); PUSH32(esp, w);          /* [7] throw strength (the player's logged 0.08 .. 1.0) */
+            PUSH32(esp, 9u);                                /* [6] type: thrown grenade */
+            memcpy(&w, &fuse, 4); PUSH32(esp, w);           /* [5] fuse */
+            PUSH32(esp, dirb);                              /* [4] direction */
+            PUSH32(esp, posb);                              /* [3] start position */
+            PUSH32(esp, 0u);                                /* [2] */
+            PUSH32(esp, s_gdef[di].h2);                     /* [1] definition hash, second half */
+            PUSH32(esp, s_gdef[di].h1);                     /* [0] definition hash, first half */
+            PUSH32(esp, 0x0018A000u);                       /* return address (only read by the logging hooks) */
+            g_ecx = 0x3C2F40u;
+            s_gdef_self = 1;
+            RECOMP_ABI_CALL(0x00182050u, sub_00182050);
+            s_gdef_self = 0;
+            obj = g_eax;
+            if (!obj && nlog < 40)
+                fprintf(stderr, "[EGREN] definition %08X/%08X not loaded in this level, trying the next\n", (unsigned)s_gdef[di].h1, (unsigned)s_gdef[di].h2);
+            if (!obj) {                                     /* the registers hold results: put the caller's back before the next try */
+                g_eax = s_eax; g_ecx = s_ecx; g_edx = s_edx; g_ebx = s_ebx; g_esi = s_esi; g_edi = s_edi;
+                g_ebp = s_ebp; g_seh_ebp = s_sehebp;
+            }
+        }
+        if (obj && nlog < 40)
+            fprintf(stderr, "[EGREN] used definition %08X/%08X\n", (unsigned)s_gdef[(pick + tr - 1) % s_gdef_n].h1, (unsigned)s_gdef[(pick + tr - 1) % s_gdef_n].h2);
+    }
+    g_eax = s_eax; g_ecx = s_ecx; g_edx = s_edx; g_ebx = s_ebx; g_esi = s_esi; g_edi = s_edi;
+    g_ebp = s_ebp; g_seh_ebp = s_sehebp; esp = s_esp;
+    g_xmm0 = s_x[0]; g_xmm1 = s_x[1]; g_xmm2 = s_x[2]; g_xmm3 = s_x[3]; g_xmm4 = s_x[4]; g_xmm5 = s_x[5]; g_xmm6 = s_x[6]; g_xmm7 = s_x[7];
+    for (k = 0; k < 8; k++)
+        g_fp_stack[k] = s_fps[k];
+    g_fp_top = s_fpt;
+    /* The game derives the launch velocity from the owner through virtual calls that a soldier answers differently from the player (his
+     * 2026-11-19 test: the grenades flew past him at 40..70 units/s, one straight up, and landed more than 10 m behind). The object keeps
+     * its velocity at +0x100 (units per 1/60 s tick, measured), so it is replaced by a ballistic arc that lands near the player. */
+    if (obj && eg_guest_ok(obj) && MEM32(obj) == 0x323B70u) {
+        const float g = 10.0f;                              /* measured from the flight samples: vertical speed drops 10 units per second */
+        float ang = eg_rand01() * 6.2831853f, rr = 1.0f + eg_rand01() * 2.5f;
+        float tx = pp[0] + cosf(ang) * rr, ty = pp[1] + sinf(ang) * rr, tz = pp[2] + 0.2f;
+        float dx = tx - v[0], dy = ty - v[1], d = sqrtf(dx * dx + dy * dy), h = tz - v[2], th = 0.78f, den, vv, vel[3], old[3];
+        int tries;
+        old[0] = eg_f(obj + 0x100); old[1] = eg_f(obj + 0x104); old[2] = eg_f(obj + 0x108);
+        if (d < 1.0f) d = 1.0f;
+        for (tries = 0; tries < 3; tries++) {               /* 45 degrees; steeper when the target is high above the thrower */
+            den = 2.0f * cosf(th) * cosf(th) * (d * tanf(th) - h);
+            if (den >= 1.0f)
+                break;
+            th += 0.25f;
+        }
+        den = 2.0f * cosf(th) * cosf(th) * (d * tanf(th) - h);
+        vv = den >= 1.0f ? sqrtf(g * d * d / den) : 25.0f;
+        if (vv < 5.0f) vv = 5.0f;
+        if (vv > 32.0f) vv = 32.0f;
+        vel[0] = vv * cosf(th) * dx / d / 60.0f;
+        vel[1] = vv * cosf(th) * dy / d / 60.0f;
+        vel[2] = vv * sinf(th) / 60.0f;
+        for (k = 0; k < 3; k++) { memcpy(&w, &vel[k], 4); MEM32(obj + 0x100u + 4u * (uint32_t)k) = w; }
+        if (nlog < 40)
+            fprintf(stderr, "[EGREN] velocity: game gave (%.3f %.3f %.3f)/tick, set speed %.1f at %.0f deg to land %.1f from the player (distance %.1f, height %.1f)\n",
+                    (double)old[0], (double)old[1], (double)old[2], (double)vv, (double)(th * 57.29578f), (double)rr, (double)d, (double)h);
+    }
+    eg_track_add(obj, tag);
+    if (nlog < 3 && obj) {
+        uint32_t vt = MEM32(obj);
+        fprintf(stderr, "[EGDUMP] our grenade: proj %08X vtable %08X slots 118:%X 15C:%X 160:%X 178:%X\n", (unsigned)obj, (unsigned)vt,
+                (unsigned)MEM32(vt + 0x118), (unsigned)MEM32(vt + 0x15C), (unsigned)MEM32(vt + 0x160), (unsigned)MEM32(vt + 0x178));
+        eg_dump("proj", obj, 0xE0, 0x230);
+    }
+    if (nlog++ < 40)
+        fprintf(stderr, "[EGREN] form %c owner %08X vt %08X t %.2f soldier %08X dist %.1f power %.2f elev %.2f from (%.1f %.1f %.1f) to (%.1f %.1f %.1f) object %08X\n",
+                tag, (unsigned)owner, (unsigned)MEM32(owner), s_gt, (unsigned)e->obj, (double)dist, (double)power, (double)elev, (double)e->pos[0], (double)e->pos[1], (double)e->pos[2],
+                (double)pp[0], (double)pp[1], (double)pp[2], (unsigned)obj);
+}
+
+static void egren_tick(void)
+{
+    static const float k_cd[4] = { 0.0f, 20.0f, 12.0f, 7.0f };
+    int lvl = game_egren_get(), i, best = -1;
+    float pp[3], bestd = 1e30f;
+    static float next_status = 10.0f;
+    eg_track_tick();
+    if (lvl <= 0 || game_split_mode())
+        return;
+    if (s_gt >= next_status) {                /* a status line every 10 s: shows what the picker sees even when nothing is thrown */
+        int known = 0, fresh = 0;
+        for (i = 0; i < EG_N; i++)
+            if (s_eg[i].obj) {
+                known++;
+                if (s_gt - s_eg[i].t <= 6.0f) fresh++;
+            }
+        fprintf(stderr, "[EGREN] status t %.1f level %d: shooters known %d (shot in the last 6 s: %d), shots noted %u, allies skipped %u, rejected old %u dead %u cooldown %u range %u, throws %u\n",
+                s_gt, lvl, known, fresh, s_eg_stat[1], s_eg_stat[0], s_eg_stat[2], s_eg_stat[3], s_eg_stat[4], s_eg_stat[5], s_eg_stat[6]);
+        next_status = s_gt + 10.0f;
+    }
+    if (s_gt < s_eg_live_until)
+        return;
+    if (s_gt - s_eg_global_last < s_eg_cd_cur)
+        return;
+    if (!eg_player_pos(pp))
+        return;
+    for (i = 0; i < EG_N; i++) {
+        EgShooter *e = &s_eg[i];
+        float dx, dy, dz, d, score;
+        if (!e->obj)
+            continue;
+        if (s_gt - e->t > 6.0f || s_gt < e->t) { s_eg_stat[2]++; continue; }
+        if (s_gt - e->last_throw < 15.0f) { s_eg_stat[4]++; continue; }
+        if (!eg_guest_ok(e->obj) || !eg_alive(e->obj)) { s_eg_stat[3]++; continue; }
+        dx = pp[0] - e->pos[0]; dy = pp[1] - e->pos[1]; dz = pp[2] - e->pos[2];
+        d = sqrtf(dx * dx + dy * dy + dz * dz);
+        if (d < 8.0f || d > 28.0f) { s_eg_stat[5]++; continue; }
+        score = fabsf(d - 16.0f);
+        if (score < bestd) { bestd = score; best = i; }
+    }
+    if (best < 0)
+        return;
+    {
+        EgShooter *e = &s_eg[best];
+        float dx = pp[0] - e->pos[0], dy = pp[1] - e->pos[1], dz = pp[2] - e->pos[2];
+        egren_throw(e, pp, sqrtf(dx * dx + dy * dy + dz * dz), s_eg_form++ % 3);
+        e->last_throw = s_gt;
+        s_eg_stat[6]++;
+        s_eg_thrown_t = s_gt;
+        s_eg_blast_n = 0;
+        s_eg_aim[0] = pp[0]; s_eg_aim[1] = pp[1]; s_eg_aim[2] = pp[2];
+        s_eg_start[0] = e->pos[0]; s_eg_start[1] = e->pos[1]; s_eg_start[2] = e->pos[2];
+        s_eg_global_last = s_gt;
+        s_eg_live_until = s_gt + 6.0f;
+        s_eg_cd_cur = k_cd[lvl] * (0.75f + 0.5f * eg_rand01());
+    }
+}
+
 static void grenade_cd_spawn(uint32_t sp)
 {
+    egren_note(sp);
     if (MEM32(sp) == 0x0009F3A5u)
         s_gun_t = s_gt;
     uint32_t owner = MEM32(sp + 4 + 32);
-    if (MEM32(sp + 4) != 0xDD8CB982u || MEM32(sp + 8) != 0xED497BEAu || MEM32(sp + 4 + 24) != 9u)
+    if (MEM32(sp + 4 + 24) != 9u)
         return;
+    grenade_def_learn(MEM32(sp + 4), MEM32(sp + 8), owner);
+    if (eg_guest_ok(MEM32(sp + 4 + 12))) {
+        uint32_t pv = MEM32(sp + 4 + 12);
+        s_last_spawn_pos[0] = eg_f(pv); s_last_spawn_pos[1] = eg_f(pv + 4); s_last_spawn_pos[2] = eg_f(pv + 8);
+    }
+    {   /* AI-GRENADE: who throws grenades (player or soldier) and from where; at most 60 lines, only for the grenade definition */
+        static unsigned nlog;
+        if (nlog < 60) {
+            int j;
+            int ply = game_pc_get() >= 0x80000000u && owner >= game_pc_get() && owner < game_pc_get() + 0x100;
+            nlog++;
+            fprintf(stderr, "[GRENSPAWN] t %.2f owner %08X vt %08X %s stack:", s_gt, owner, (owner >= 0x10000u && owner < 0x90000000u) ? MEM32(owner) : 0u, ply ? "PLAYER" : "OTHER");
+            for (j = 0; j < 64; j++) {
+                uint32_t v = MEM32(sp + (uint32_t)(j * 4));
+                if (v >= 0x11000u && v < 0x2D8280u)
+                    fprintf(stderr, " %X", (unsigned)v);
+            }
+            fprintf(stderr, "\n");
+            fprintf(stderr, "[GRENSPAWN]   args:");           /* template for a script-made throw: the spawner's arguments, and what the pointers hold */
+            for (j = 0; j < 12; j++) {
+                uint32_t v = MEM32(sp + 4 + (uint32_t)(j * 4));
+                float f0 = 0, f1 = 0, f2 = 0, f3 = 0;
+                if ((v >= 0x10000u && v < 0x04000000u) || (v >= 0x80000000u && v < 0x84000000u)) {
+                    uint32_t w;
+                    w = MEM32(v); memcpy(&f0, &w, 4);
+                    w = MEM32(v + 4); memcpy(&f1, &w, 4);
+                    w = MEM32(v + 8); memcpy(&f2, &w, 4);
+                    w = MEM32(v + 12); memcpy(&f3, &w, 4);
+                    fprintf(stderr, " [%d]%08X->(%g %g %g %g)", j, v, (double)f0, (double)f1, (double)f2, (double)f3);
+                } else {
+                    memcpy(&f0, &v, 4);
+                    fprintf(stderr, " [%d]%08X(%g)", j, v, (double)f0);
+                }
+            }
+            fprintf(stderr, "\n");
+        }
+    }
     if (!(game_pc_get() >= 0x80000000u && owner >= game_pc_get() && owner < game_pc_get() + 0x100))
         return;
+    {   /* only a hand grenade (Mills / Stick / Mk2) starts the countdown: a bazooka rocket or a planted charge is also a type 9 spawn by the player */
+        uint32_t h1 = MEM32(sp + 4), h2 = MEM32(sp + 8);
+        int k, hand = 0;
+        for (k = 0; k < 3; k++)
+            if (s_gdef[k].h1 == h1 && s_gdef[k].h2 == h2)
+                hand = 1;
+        int held = game_held_weapon_grenade();
+        if (!hand && held == 1)         /* a quick throw can carry another definition pair: a grenade in the hands at the spawn is a grenade throw */
+            hand = 1;
+        {
+            static unsigned nrej;
+            if (nrej < 40) {
+                nrej++;
+                fprintf(stderr, "[GRENTIMER] t %.2f spawn %08X/%08X held=%d -> %s\n", s_gt, (unsigned)h1, (unsigned)h2, held, hand ? "grenade" : "not a grenade");
+            }
+        }
+        if (!hand) {
+            s_gren_end = 0.0f;          /* a pin pull that turned into a rocket / charge is not a grenade */
+            g_equipped = 0;
+            return;
+        }
+    }
     s_gren_thrown = 1;
+    g_equipped = 0;             /* the grenade has left the hand: a later Action (reload, use) is not a pin pull */
     s_gren_rel = s_gt;
     if (s_gren_end <= s_gt || s_gt - s_gren_press > 5.5f) {   /* no pin pull seen: a direct throw, the fuse runs 4.5 s from the spawn */
         s_gren_end = s_gt + 4.5f;
@@ -2065,6 +2987,108 @@ static void grenade_cd_spawn(uint32_t sp)
     }
 
     fprintf(stderr, "[GRENTIMER] throw: press age %.2f s, left %.2f s\n", s_gt - s_gren_press, s_gren_end - s_gt);
+}
+
+/* ---- Run icon: the HUD stance indicator (hudstanceindicator.cpp, vtable 0x320C68) owns three HUD images, stand / crouch /
+ * prone, at +0x90 / +0x94 / +0x98. An image keeps its sheet rectangle in frame 0 at img+0x90: texture, then four floats at
+ * +0x94 top (v0), +0x98 left (u0), +0x9C bottom (v1), +0xA0 right (u1); +0x73 is its dirty flag. While sprinting the "stand"
+ * image is pointed at a fourth cell of the same sheet (mods\textures\eb0d3f9abd2b0110*.png has the running figure there,
+ * built by tools\hud\build_stance_hd.py); when the sprint ends the stand rectangle is put back. Only with the sheet mod
+ * loaded (the original sheet has nothing in that cell). The object is remembered by hooks in the generated
+ * sub_0016CBD0 (load) and sub_0016D2B0 (destructor). */
+int texdec_texmod_get(void);
+int texmod_has(uint64_t hash);
+#define HUD_SHEET_HASH 0xEB0D3F9ABD2B0110ull
+#define RUN_CELL_X 144.0f
+#define RUN_CELL_Y 77.0f
+#define RUN_CELL_W 27.0f
+#define RUN_CELL_H 57.0f
+static uint32_t s_stance_obj;
+static int s_run_shown;
+static float s_run_idle;
+static float s_stand_rect[4];
+
+void game_stance_seen(uint32_t obj)
+{
+    s_stance_obj = obj;
+    s_run_shown = 0;
+    g_equipped = 0;             /* a mission starts: nothing is in hand, no countdown (a grenade state of the last mission must not arm on the first Action) */
+    s_gren_end = 0.0f;
+    s_gren_thrown = 0;
+    memset(s_eg, 0, sizeof s_eg);   /* enemy grenades: no shooters known, the first throw waits a few seconds */
+    s_eg_global_last = s_gt;
+    s_eg_live_until = 0.0f;
+    s_eg_cd_cur = 6.0f;
+}
+
+void game_stance_gone(uint32_t obj)
+{
+    if (obj == s_stance_obj) {
+        s_stance_obj = 0;
+        s_run_shown = 0;
+    }
+}
+
+static void stance_run_icon(int running, float dt)
+{
+    static int logged;
+    uint32_t obj = s_stance_obj, img, tex;
+    float tw, th;
+    int want;
+
+    if (!obj)
+        return;
+    if (running)
+        s_run_idle = 0.0f;
+    else
+        s_run_idle += dt;
+    want = running || (s_run_shown && s_run_idle < 0.15f);           /* a short hold, so the icon does not flicker */
+    if (want && !(texdec_texmod_get() && texmod_has(HUD_SHEET_HASH)))
+        want = 0;
+    if (want == s_run_shown)
+        return;
+    if (MEM32(obj) != 0x320C68u)                                     /* not a stance indicator any more */
+        return;
+    img = MEM32(obj + 0x90);
+    if (!img || MEM32(img) != 0x31F448u || MEM32(img + 0xE0) != 0u)  /* the stand image, frame 0 */
+        return;
+    tex = MEM32(img + 0x90);
+    if (!tex)
+        return;
+    tw = (float)MEM32(tex + 8);
+    th = (float)MEM32(tex + 0xC);
+    if (want) {
+        float w, h;
+        s_stand_rect[0] = MEMF(img + 0x94);
+        s_stand_rect[1] = MEMF(img + 0x98);
+        s_stand_rect[2] = MEMF(img + 0x9C);
+        s_stand_rect[3] = MEMF(img + 0xA0);
+        w = (s_stand_rect[3] - s_stand_rect[1]) * tw;
+        h = (s_stand_rect[2] - s_stand_rect[0]) * th;
+        if (w < 20.0f || w > 40.0f || h < 50.0f || h > 70.0f) {      /* not the 27 x 61 stand cell: the layout guess is wrong */
+            if (logged < 3) {
+                logged++;
+                fprintf(stderr, "[STANCE] stand rect looks wrong (%.1f x %.1f px, texture %.0f x %.0f), run icon off\n", w, h, tw, th);
+            }
+            s_stance_obj = 0;
+            return;
+        }
+        MEMF(img + 0x94) = RUN_CELL_Y / th;
+        MEMF(img + 0x98) = RUN_CELL_X / tw;
+        MEMF(img + 0x9C) = (RUN_CELL_Y + RUN_CELL_H) / th;
+        MEMF(img + 0xA0) = (RUN_CELL_X + RUN_CELL_W) / tw;
+    } else {
+        MEMF(img + 0x94) = s_stand_rect[0];
+        MEMF(img + 0x98) = s_stand_rect[1];
+        MEMF(img + 0x9C) = s_stand_rect[2];
+        MEMF(img + 0xA0) = s_stand_rect[3];
+    }
+    MEM8(img + 0x73) = 1;
+    s_run_shown = want;
+    if (logged < 12) {
+        logged++;
+        fprintf(stderr, "[STANCE] %s icon (obj %08X img %08X tex %.0fx%.0f)\n", want ? "run" : "stand", obj, img, tw, th);
+    }
 }
 
 static void sprint_apply(void)
@@ -2076,6 +3100,7 @@ static void sprint_apply(void)
     float speed, secs, recover, dt;
     int held;
 
+    { extern void game_hitmark_poll(void); game_hitmark_poll(); }     /* hit marker: white X = hit, red X = kill */
     if (!s_player || ecx != s_player || game_split_mode())
         return;
     if (!freq.QuadPart)
@@ -2086,13 +3111,23 @@ static void sprint_apply(void)
     if (dt > 0.1f)
         dt = 0.1f;                      /* a pause or a load is not rest */
     grenade_cd_tick(dt);
+    egren_tick();                       /* PATCH: enemy grenades */
     held = mkb_sprint_query(&speed, &secs, &recover);
     mkb_sprint_pad_moving(MEMF(esp + 4) > 0.2f, tired);
     if (stamina < 0.0f)
         stamina = secs;
-    /* stamina bar above the adrenaline meter, window fractions measured on a 16:9 screenshot */
-    if (game_stambar_get())
-        recomp_screenfx_bar(0.7703f, 0.7800f, 0.9203f, 0.7960f, secs > 0.0f ? stamina / secs : 0.0f);
+    /* stamina bar: a vertical capsule beside the posture icon, drawn into the frame by the presenter. Fractions of the
+     * picture measured on a 16:9 HUD: the icon spans y 0.81-0.93, its rifle ends at x 0.303; the capsule is 0.252 wide per height. */
+    if (game_stambar_get() && !recomp_menu_up()) {
+        extern float recomp_wide_hud_k(void);                       /* ultrawide: the HUD is pulled toward the centre (nv2a_gpu.c) */
+        float hk = recomp_wide_hud_k();
+        nv2a_gpu_hud_bar(hk > 0.0f ? 0.307f * hk : 0.307f, 0.810f, 0.120f, 0.252f, secs > 0.0f ? stamina / secs : 0.0f);
+    }
+    stance_run_icon(held && !tired && stamina > 0.0f && MEMF(esp + 4) > 0.2f, dt);
+    { extern void game_runpose_tick(int running, float dt);                               /* RUN POSE (recomp_manual.c) */
+      game_runpose_tick(held && !tired && stamina > 0.0f && MEMF(esp + 4) > 0.2f, dt); }
+    { extern void game_breath_tick(int running, int tired, float dt);                     /* BREATH (game_sfx.c) */
+      game_breath_tick(held && !tired && stamina > 0.0f && MEMF(esp + 4) > 0.2f, tired, dt); }
     if (held && !tired && stamina > 0.0f && MEMF(esp + 4) > 0.2f) {
         stamina -= dt;
         if (stamina <= 0.0f) {
@@ -2568,6 +3603,107 @@ loc_0011B184: ;
  * Reason: bodies that stay on the floor show stretched spike shapes when their high-detail model is used; the coarse
  * models are fine. */
 #define LOD_DEAD_MAX 128
+/* CORPSE-FLING (2026-11-19): at high fps a soldier's body gets a hard kick at the moment of death. Diagnostic + experiment.
+ * RECOMP_FLING_LOG=1 logs [DEATH] at each kill, [DDT] for the first updates of each dead soldier and [HKVEL] for every
+ * call of the Havok body velocity setter sub_000FEFA0. RECOMP_DEAD_DT=1 runs a dead soldier's animation update (sub_000F9690)
+ * only once a whole 59.94 Hz frame (dt >= 1.0) has built up, with the summed dt, as at 60 fps. */
+static int fling_log_on(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("RECOMP_FLING_LOG");
+        v = e && *e && *e != '0';
+    }
+    return v;
+}
+static int dead_dt_on(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("RECOMP_DEAD_DT");
+        v = e && *e && *e != '0';
+        if (v)
+            fprintf(stderr, "[FLING] dead soldiers update at a 60 Hz step (RECOMP_DEAD_DT)\n");
+    }
+    return v;
+}
+#define DD_MAX 64
+static uint32_t s_dd_obj[DD_MAX];
+static float s_dd_acc[DD_MAX];
+static int s_dd_cnt[DD_MAX];
+/* HAVOK STEP (found 2026-11-19 with the dt hunt): the world update sub_00132EE0 (called each tick with dt in 59.94 Hz
+ * frames, clamped to 6) steps Havok (sub_00227D50, dt in seconds) n = (int(dt)/2 + 1) times with dt/n. The game was made for
+ * 30/60 fps: steps of 1/60 s (two of them at 30 fps). At 144-165 fps each step is 1/144-1/165 s, and the freshly made ragdoll
+ * of a dead soldier (limbs overlapping) is pushed out with a speed that grows as the step shrinks: the kick.
+ * RECOMP_HK_STEP=1: for RECOMP_HK_WINDOW_MS (default 1500) after a kill the dt is summed and Havok steps only once a whole
+ * 60 Hz frame has built up (with the summed dt), everything else steps every frame as before. =2: always (a test: the
+ * player's own physics props may judder). 0/unset: off. Hook at loc_0013302F in recomp_0035.c (game_hk_step_gate). */
+static uint64_t s_hk_until;
+static int s_hk_m = -1;
+static int hk_mode(void)
+{
+    if (s_hk_m < 0) {
+        const char *e = getenv("RECOMP_HK_STEP");
+        /* default OFF since 2026-11-19: mode 2 can freeze the game's physics (a spin inside Havok some seconds into a mission).
+         * The Recomp Settings row "Corpse fix (60 Hz physics)" / ini corpse_60hz=1 (env RECOMP_CORPSE_60HZ=1) turns mode 2 on. */
+        const char *c = getenv("RECOMP_CORPSE_60HZ");
+        s_hk_m = e && *e ? atoi(e) : (c && *c && *c != '0') ? 2 : 0;
+        if (s_hk_m < 0 || s_hk_m > 2)
+            s_hk_m = 0;
+        fprintf(stderr, "[HKSTEP] Havok step mode %d\n", s_hk_m);
+    }
+    return s_hk_m;
+}
+int game_corpse60_get(void)
+{
+    return hk_mode() == 2;
+}
+void game_corpse60_set(int on)
+{
+    hk_mode();
+    s_hk_m = on ? 2 : 0;
+}
+static void game_hk_note_death(void)
+{
+    static uint32_t win = 0;
+    if (!hk_mode())
+        return;
+    if (!win) {
+        const char *e = getenv("RECOMP_HK_WINDOW_MS");
+        win = e && atoi(e) > 0 ? (uint32_t)atoi(e) : 1500u;
+    }
+    s_hk_until = GetTickCount64() + win;
+}
+/* Returns 1 = skip Havok this tick. Otherwise *dt (frames) may have been raised to the summed dt. */
+int game_hk_step_gate(float *dt)
+{
+    static float acc;
+    static int in_win;
+    int m = hk_mode();
+    if (!m)
+        return 0;
+    if (m == 1 && GetTickCount64() > s_hk_until) {
+        acc = 0.0f;
+        in_win = 0;
+        return 0;
+    }
+    if (!in_win && fling_log_on())
+        fprintf(stderr, "[HKSTEP] 60 Hz stepping on (frame %u)\n", (unsigned)g_game_frames);
+    in_win = 1;
+    acc += *dt;
+    if (acc < 0.999f)
+        return 1;
+    *dt = acc;
+    acc = 0.0f;
+    return 0;
+}
+static void dd_clear(uint32_t obj)
+{
+    int i;
+    for (i = 0; i < DD_MAX; i++)
+        if (s_dd_obj[i] == obj)
+            s_dd_obj[i] = 0;
+}
 static uint32_t s_lod_dead[LOD_DEAD_MAX];
 static int s_lod_dead_n, s_lod_dead_next;
 
@@ -2577,6 +3713,10 @@ void game_lod_dead(uint32_t obj)
     for (i = 0; i < s_lod_dead_n; i++)
         if (s_lod_dead[i] == obj)
             return;
+    if (fling_log_on())
+        fprintf(stderr, "[DEATH] frame %u dt %.4f soldier %08X\n", (unsigned)g_game_frames, (double)MEMF(0x373268), (unsigned)obj);
+    game_hk_note_death();
+    { extern void game_stain_death(uint32_t); game_stain_death(obj); }   /* BLOOD-STAIN */
     if (s_lod_dead_n < LOD_DEAD_MAX) {
         s_lod_dead[s_lod_dead_n++] = obj;
     } else {
@@ -2595,6 +3735,7 @@ void game_lod_undead(uint32_t obj)
     int i;
     for (i = 0; i < s_lod_dead_n; i++)
         if (s_lod_dead[i] == obj) {
+            dd_clear(obj);
             s_lod_dead[i] = s_lod_dead[--s_lod_dead_n];
             return;
         }
@@ -2603,6 +3744,60 @@ void game_lod_undead(uint32_t obj)
 /* Model detail (Recomp settings row "Model detail", launcher lod=0..2, env RECOMP_LOD): 0 = the game's own distances (the
  * default), 1 = Higher, 2 = Highest. Its scale multiplies every bucket index: 0.75 reaches each level at 1.33 times the
  * distance, 0.5 at twice. Both values are a first guess: play_log.txt shows the level table to tune them. */
+/* Hook at the top of sub_000F9690 (soldier animation update; this = soldier, arg = dt in 59.94 Hz frames).
+ * Returns 1 = skip this update. Otherwise *dt may have been raised to the summed dt. */
+int game_dead_dt_gate(uint32_t obj, float *dt)
+{
+    static int logged;
+    int i, slot = -1, dead = 0;
+    float acc;
+    if (!fling_log_on() && !dead_dt_on())
+        return 0;
+    for (i = 0; i < s_lod_dead_n; i++)
+        if (s_lod_dead[i] == obj) { dead = 1; break; }
+    if (!dead)
+        return 0;
+    for (i = 0; i < DD_MAX; i++) {
+        if (s_dd_obj[i] == obj) { slot = i; break; }
+        if (slot < 0 && s_dd_obj[i] == 0) slot = i;
+    }
+    if (slot < 0)
+        slot = 0;
+    if (s_dd_obj[slot] != obj) {
+        s_dd_obj[slot] = obj;
+        s_dd_acc[slot] = 0.0f;
+        s_dd_cnt[slot] = 0;
+    }
+    if (fling_log_on() && s_dd_cnt[slot] < 12 && logged < 600) {
+        logged++;
+        fprintf(stderr, "[DDT] soldier %08X update %d frame %u dt %.4f acc %.4f\n", (unsigned)obj, s_dd_cnt[slot],
+                (unsigned)g_game_frames, (double)*dt, (double)s_dd_acc[slot]);
+    }
+    s_dd_cnt[slot]++;
+    if (!dead_dt_on())
+        return 0;
+    acc = s_dd_acc[slot] + *dt;
+    if (acc < 0.999f) {
+        s_dd_acc[slot] = acc;
+        return 1;
+    }
+    s_dd_acc[slot] = 0.0f;
+    *dt = acc;
+    return 0;
+}
+
+/* Hook at the top of sub_000FEFA0 (Havok body: set linear + angular velocity; this = the object, args = two vec3). */
+void game_hkvel_log(uint32_t self, uint32_t lin, uint32_t ang, uint32_t ret)
+{
+    static int n;
+    if (!fling_log_on() || n >= 300)
+        return;
+    n++;
+    fprintf(stderr, "[HKVEL] frame %u self %08X lin %.2f %.2f %.2f ang %.2f %.2f %.2f ret %08X\n", (unsigned)g_game_frames,
+            (unsigned)self, (double)MEMF(lin), (double)MEMF(lin + 4), (double)MEMF(lin + 8), (double)MEMF(ang),
+            (double)MEMF(ang + 4), (double)MEMF(ang + 8), (unsigned)ret);
+}
+
 static const float k_lod_scale[3] = { 1.0f, 0.75f, 0.5f };
 static const char *const k_lod_name[3] = { "Game", "Higher", "Highest" };
 static int s_lod_idx = -1;
@@ -3008,7 +4203,287 @@ void game_reload_poll(uint32_t pc)
  * 24 objects created, into the same shot_probe file. */
 static uint32_t game_pc_val;
 uint32_t game_pc_get(void) { return game_pc_val; }
-void game_pc_note(uint32_t pc) { extern void game_reload_poll(uint32_t); game_pc_val = pc; game_reload_poll(pc); }
+
+/* AUTO-SWITCH (Recomp Settings "Auto switch weapon"): when the player's magazine runs dry the port presses Change weapon
+ * (B) by itself, so the other gun comes up instead of the long reload. Read from the game: the held weapon object is
+ * MEM32(MEM32(pc + 0x1CC) + 0x1128); its ammo word at +0x1CC is clip (high 16 bits) | reserve (low 16 bits), and the clip
+ * only changes by shooting (a reload moves rounds at its end, measured 2026-11-04; the Karabiner's moves at once). A clip
+ * that goes 1 -> 0 (or 1 -> full) within 400 ms of the player's own bullet starts it (a grenade has a 300-frame fuse life
+ * in its row, so it never counts as a bullet). B is pulsed (40 ms down / 40 ms up, console B in mkb_input.c via
+ * g_mkb_inject_weapon_until_ms) until the held weapon object changes, 2.5 s at most. Switching to an empty gun never starts a new round
+ * (the clip is re-read when the weapon object changes). RECOMP_AUTO_SWITCH=1 turns it on (ini auto_switch). */
+extern volatile double g_mkb_inject_weapon_until_ms;
+static int s_autosw = -1;
+static double s_ab_last_bullet_ms;
+int game_autoswitch_get(void)
+{
+    if (s_autosw < 0) {
+        const char *e = getenv("RECOMP_AUTO_SWITCH");
+        s_autosw = e && e[0] == '2' ? 2 : e && e[0] == '1' ? 1 : 0;
+    }
+    return s_autosw;
+}
+/* 0 = off, 1 = when the magazine runs empty, 2 = only when the weapon is out of ammo altogether (clip and reserve) */
+void game_autoswitch_set(int mode) { game_autoswitch_get(); s_autosw = mode == 2 ? 2 : mode == 1 ? 1 : 0; }
+
+static void autoswitch_poll(uint32_t pc)
+{
+    static uint32_t prev_w;
+    static unsigned prev_clip;
+    static int pending, tries;
+    static double t_start, t_check;
+    uint32_t sol, w, ammo;
+    unsigned clip;
+    double now;
+
+    if (!game_autoswitch_get() || pc < 0x80000000u)
+        return;
+    sol = MEM32(pc + 0x1CC);
+    if (sol < 0x80000000u)
+        return;
+    w = MEM32(sol + 0x1128);
+    if (w < 0x80000000u)
+        return;
+    ammo = MEM32(w + 0x1CC);
+    clip = ammo >> 16;
+    now = rl_ms();
+    if (w != prev_w) {
+        if (pending)
+            fprintf(stderr, "[AUTOSWITCH] held weapon object %08X -> %08X (clip %u reserve %u) after %.0f ms, %d pulse(s)\n",
+                    prev_w, w, clip, ammo & 0xFFFFu, now - t_start, tries);
+        prev_w = w;
+        prev_clip = clip;
+        pending = 0;
+        return;
+    }
+    if (pending) {
+        /* the game ignores a Change weapon press for the first part of the reload / shot recovery (measured: the press 40 ms
+         * after the empty clip was dropped, one 740 ms later worked), so B is pulsed (40 ms down, 40 ms up) until the held
+         * weapon object changes: the switch happens as early as the game allows. The Karabiner's clip is refilled within
+         * a frame of the last shot, so a refill does not stop it. */
+        if (now - t_start > 2500.0) {
+            fprintf(stderr, "[AUTOSWITCH] gave up after %d pulses (weapon %08X stayed)\n", tries, w);
+            pending = 0;
+        } else if (now >= t_check) {
+            g_mkb_inject_weapon_until_ms = now + 40.0;
+            t_check = now + 80.0;
+            tries++;
+        }
+        prev_clip = clip;
+        return;
+    }
+    /* the last round of the clip was fired: the clip reads 0, or (a Karabiner-style reload that moves the rounds at once)
+     * it already jumped back up within the same moment; either way within 400 ms of the player's own gun bullet */
+    /* mode 2 (out of ammo altogether): only a clip that is empty with nothing left in the reserve counts; a clip that
+     * refills at once (the Karabiner's) has rounds left, so it never starts a switch */
+    if (game_autoswitch_get() == 2) {
+        if (prev_clip > 0 && clip == 0 && (ammo & 0xFFFFu) == 0 && now - s_ab_last_bullet_ms < 400.0) {
+            pending = 1;
+            tries = 0;
+            t_start = now;
+            t_check = now;
+            fprintf(stderr, "[AUTOSWITCH] out of ammo on weapon %08X (clip 0, reserve 0): switching\n", w);
+        }
+        prev_clip = clip;
+        return;
+    }
+    if (((prev_clip > 0 && clip == 0) || (prev_clip == 1 && clip > 1)) && now - s_ab_last_bullet_ms < 400.0) {
+        pending = 1;
+        tries = 0;
+        t_start = now;
+        t_check = now;
+        fprintf(stderr, "[AUTOSWITCH] clip empty on weapon %08X (clip %u, reserve %u): switching\n", w, clip, ammo & 0xFFFFu);
+    }
+    prev_clip = clip;
+}
+
+/* BODY-PROBE (RECOMP_BODY_PROBE=1, research for third person): does the player object own a body object (the class with vtable
+ * 0x3157F0 from AvatarBody.cpp, which every soldier body uses)? 4 s and 40 s after the player is first seen (and every 40 s after), scan the
+ * player object (+0x0..+0x1400) for pointers to objects whose vtable is in .rdata, log offset / target / vtable, and mark the 0x3157F0 ones.
+ * Also follows one level into each target (+0..+0x200). Lines: [BODYPROBE] in play_log.txt. */
+static void body_probe(uint32_t pc)
+{
+    static int on = -1;
+    static DWORD t0, next;
+    DWORD now = GetTickCount();
+    uint32_t o, o2, tgt, vt, n = 0;
+    if (on < 0) { const char *e = getenv("RECOMP_BODY_PROBE"); on = (e && *e == '1') ? 1 : 0; t0 = now; next = now + 4000; }
+    if (!on || (int)(now - next) < 0 || pc < 0x80000000u || pc >= 0x84000000u)
+        return;
+    next = now + 40000;
+    fprintf(stderr, "[BODYPROBE] player %08X vtable %08X\n", pc, MEM32(pc));
+    for (o = 4; o < 0x1400; o += 4) {
+        tgt = MEM32(pc + o);
+        if (tgt < 0x80000000u || tgt >= 0x84000000u || (tgt & 3)) continue;
+        vt = MEM32(tgt);
+        if (vt < 0x2FE5C0u || vt >= 0x3554C0u) continue;
+        fprintf(stderr, "[BODYPROBE]  pc+%04X -> %08X vt %08X%s\n", o, tgt, vt, vt == 0x3157F0u ? "  <== BODY CLASS (AvatarBody)" : "");
+        if (++n > 120) break;
+        for (o2 = 4; o2 < 0x200; o2 += 4) {
+            uint32_t t2 = MEM32(tgt + o2);
+            uint32_t v2;
+            if (t2 < 0x80000000u || t2 >= 0x84000000u || (t2 & 3)) continue;
+            v2 = MEM32(t2);
+            if (v2 == 0x3157F0u)
+                fprintf(stderr, "[BODYPROBE]     pc+%04X -> %08X +%03X -> %08X vt %08X  <== BODY CLASS (AvatarBody)\n", o, tgt, o2, t2, v2);
+        }
+    }
+    fprintf(stderr, "[BODYPROBE] scan done, %u object pointers\n", n);
+}
+
+/* The game's own cheat codes (sub_0015BF40..., the six-button codes entered on the pad), as switches in the Cheats group.
+ * Invincible = byte 0x37279C, Unlimited Ammo = byte 0x37279E (the game's own messages: the 0x37279C branch prints "PlayerIsInvincible",
+ * the 0x37279E branch "Unlimited Ammo"), Disable shellshock = byte 0x51D6C4 (sub_00129640 returns early while it is set), Disable HUD =
+ * byte 0x3785A5 (copied from bit 4 of the profile's option byte +0x12): the game's code toggles them and many places read them, so while
+ * the switch is on the byte is forced to 1 on every look-update (the player's frame), and set back once when the switch goes off.
+ * The codes as pad presses (CheatCC list, mapped to the tables at 0x31F088: L=1 White=2 R=4 Black=8 Y=16 B=32 X=64 A=128 Down=256
+ * Up=512 Left=1024 Right=2048): 0x31F088 Cheat mode, 0x31F0A0 Invincible, 0x31F0B8 Ammo, 0x31F0D0 Full adrenaline meter, 0x31F0DC Kill
+ * nemesis, 0x31F0E8 Pickup OSS document, 0x31F0F4 Disable shellshock, 0x31F0C4 Disable HUD, 0x31F0AC Suicide; 0x31F094 (A Y B Down A
+ * White, sets profile word +0x1354) is on no list and is not used.
+ * Suicide = the cheat's own call: if the player count (0x3E8D54) is 1, virtual call +0x50 of the object at 0x3E8D08 with argument 0
+ * (generated code at 0x0015C0E6..0x0015C109). The menu only sets a request; it is run on the game thread here, and dropped after 2 s. */
+static int s_cheat_ammo = -1, s_cheat_god = -1;
+int game_cheat_ammo_get(void)
+{
+    if (s_cheat_ammo < 0) { const char *e = getenv("RECOMP_CHEAT_AMMO"); s_cheat_ammo = e && e[0] == '1'; }
+    return s_cheat_ammo;
+}
+void game_cheat_ammo_set(int on) { game_cheat_ammo_get(); s_cheat_ammo = on ? 1 : 0; }
+int game_cheat_god_get(void)
+{
+    if (s_cheat_god < 0) { const char *e = getenv("RECOMP_CHEAT_GOD"); s_cheat_god = e && e[0] == '1'; }
+    return s_cheat_god;
+}
+void game_cheat_god_set(int on) { game_cheat_god_get(); s_cheat_god = on ? 1 : 0; }
+static int s_cheat_noshock = -1, s_cheat_nohud = -1;
+int game_cheat_noshock_get(void)
+{
+    if (s_cheat_noshock < 0) { const char *e = getenv("RECOMP_CHEAT_NOSHOCK"); s_cheat_noshock = e && e[0] == '1'; }
+    return s_cheat_noshock;
+}
+void game_cheat_noshock_set(int on) { game_cheat_noshock_get(); s_cheat_noshock = on ? 1 : 0; }
+int game_cheat_nohud_get(void)
+{
+    if (s_cheat_nohud < 0) { const char *e = getenv("RECOMP_CHEAT_NOHUD"); s_cheat_nohud = e && e[0] == '1'; }
+    return s_cheat_nohud;
+}
+void game_cheat_nohud_set(int on) { game_cheat_nohud_get(); s_cheat_nohud = on ? 1 : 0; }
+
+
+/* Full adrenaline meter ("Rally Bar Filled" in the game's message; the adrenaline meter is the game's rally bar) = the game's code
+ * 0x31F0D0 (recomp_0040.c 0x0015C164..): single player path (byte 0x1ED4 of the object at 0x3888C0 has bit 0x10 clear): player = virtual
+ * call +0x24 of the object at 0x3E8D08 (no arguments); sub_00127B50 on player + 0x13D4 with 100.0f. */
+static volatile LONG s_rally_req;
+static volatile double s_rally_req_ms;
+void game_cheat_rally_request(void) { s_rally_req_ms = rl_ms(); s_rally_req = 1; }
+
+/* Kill nemesis = the game's code 0x31F0DC (recomp_0040.c 0x0015C208..): player = virtual call +0x24 of the object at 0x3E8D08 (no
+ * arguments), then sub_00079250 on the object at 0x3888C0 with the stack arguments (player, 3, 0, 1) (a "nemesis killed" record for
+ * that player). (Pickup OSS document, code 0x31F0E8 = stat 0xD + 1, was tried and removed: no visible effect.) */
+static volatile LONG s_nem_req;
+static volatile double s_nem_req_ms;
+void game_cheat_nemesis_request(void) { s_nem_req_ms = rl_ms(); s_nem_req = 1; }
+
+static void nemesis_kill_run(void)
+{
+    uint32_t sv_eax = eax, sv_ecx = ecx, sv_edx = edx;
+    uint32_t prof = MEM32(0x3888C0), obj = MEM32(0x3E8D08), vt = obj ? MEM32(obj) : 0, player;
+    if (prof < 0x10000u || prof >= 0x84000000u)
+        fprintf(stderr, "[CHEAT] kill nemesis ignored: no profile (%08X)\n", prof);
+    else if (vt < 0x2FE5C0u || vt >= 0x3554C0u)
+        fprintf(stderr, "[CHEAT] kill nemesis ignored: no player manager (obj %08X vtable %08X)\n", obj, vt);
+    else {
+        ecx = obj;
+        { uint32_t _icall_esp = g_esp;
+        { uint32_t _icall_target = MEM32(vt + 0x24); PUSH32(esp, 0x0015C1D9u); RECOMP_ICALL_SAFE_AT(_icall_target, _icall_esp, 0x0015C1D6u); } /* indirect call */
+        }
+        player = eax;
+        fprintf(stderr, "[CHEAT] kill nemesis: player %08X\n", player);
+        if (player >= 0x80000000u) {
+            PUSH32(esp, 1);
+            PUSH32(esp, 0);
+            PUSH32(esp, 3);
+            PUSH32(esp, player);
+            ecx = 0x3888C0;
+            PUSH32(esp, 0x0015C223u); RECOMP_ABI_CALL(0x00079250u, sub_00079250); /* call 0x00079250 (ret 16) */
+        }
+    }
+    eax = sv_eax; ecx = sv_ecx; edx = sv_edx;
+}
+
+static void rally_fill_run(void)
+{
+    uint32_t sv_eax = eax, sv_ecx = ecx, sv_edx = edx;
+    uint32_t prof = MEM32(0x3888C0), obj = MEM32(0x3E8D08), vt = obj ? MEM32(obj) : 0, player;
+    /* the profile object is a static one (0x3864D8 in .data), not a 0x8xxxxxxx heap pointer */
+    if (prof < 0x10000u || prof >= 0x84000000u || (MEM8(prof + 0x1ED4) & 0x10))
+        fprintf(stderr, "[CHEAT] rally bar ignored: no single-player profile (profile %08X)\n", prof);
+    else if (vt < 0x2FE5C0u || vt >= 0x3554C0u)
+        fprintf(stderr, "[CHEAT] rally bar ignored: no player manager (obj %08X vtable %08X)\n", obj, vt);
+    else {
+        ecx = obj;
+        { uint32_t _icall_esp = g_esp;
+        { uint32_t _icall_target = MEM32(vt + 0x24); PUSH32(esp, 0x0015C1D9u); RECOMP_ICALL_SAFE_AT(_icall_target, _icall_esp, 0x0015C1D6u); } /* indirect call */
+        }
+        player = eax;
+        fprintf(stderr, "[CHEAT] rally bar: player %08X (vtable call +0x24 target %08X)\n", player, MEM32(vt + 0x24));
+        if (player >= 0x80000000u) {
+            ecx = player + 0x13D4;
+            PUSH32(esp, 0x42C80000);
+            PUSH32(esp, 0x0015C1F1u); RECOMP_ABI_CALL(0x00127B50u, sub_00127B50); /* call 0x00127B50 */
+        }
+    }
+    eax = sv_eax; ecx = sv_ecx; edx = sv_edx;
+}
+
+static void cheats_poll(uint32_t pc)
+{
+    static int last_ammo, last_god, last_shock, last_hud;
+    static double god_log_ms;
+    int a = game_cheat_ammo_get(), g = game_cheat_god_get(), s = game_cheat_noshock_get(), h = game_cheat_nohud_get();
+    if (g) MEM8(0x37279C) = 1; else if (last_god) MEM8(0x37279C) = 0;       /* Invincible */
+    if (a) MEM8(0x37279E) = 1; else if (last_ammo) MEM8(0x37279E) = 0;      /* Unlimited ammo */
+    if (s) MEM8(0x51D6C4) = 1; else if (last_shock) MEM8(0x51D6C4) = 0;     /* Disable shellshock */
+    /* Disable HUD: byte 0x3785A5 is 1 while the HUD is shown (initialised to 1; sub_001590B0 skips the HUD update when it is 0), and
+     * the cheat flips bit 4 of the profile option byte, which is copied into it. So hide = 0, show = 1. */
+    if (h) MEM8(0x3785A5) = 0;
+    else if (last_hud) MEM8(0x3785A5) = 1;
+    if (g && pc >= 0x80000000u) {
+        /* Invincible: the game's own byte floors health at 5.0 in its setter (sub_00116770), but a test showed he still died, so the
+         * health is also held above a floor on every look-update. The values are logged every 3 s to prove the fields are right. */
+        uint32_t sol = MEM32(0x3E8D08);     /* the player object: health at +0x3B0, adrenaline at +0x13D4 (pc+0x1CC is not it) */
+        if (sol >= 0x80000000u && sol < 0x84000000u) {
+            float hp = MEMF(sol + 0x3B0), mx = MEMF(sol + 0x3B4);
+            double now = rl_ms();
+            if (now - god_log_ms > 3000.0) {
+                god_log_ms = now;
+                fprintf(stderr, "[CHEAT] invincible: player %08X health %.2f max %.2f (byte %u)\n", sol, hp, mx, (unsigned)MEM8(0x37279C));
+            }
+            /* no damage at all (his request 2026-11-19): the health is put back to the maximum on every look-update */
+            if (mx > 1.0f && mx < 100000.0f && hp < mx) {
+                if (hp < mx * 0.5f)
+                    fprintf(stderr, "[CHEAT] invincible: health was %.2f of %.2f, refilled\n", hp, mx);
+                MEMF(sol + 0x3B0) = mx;
+            }
+        }
+    }
+    last_ammo = a;
+    last_god = g;
+    last_shock = s;
+    last_hud = h;
+    if (s_nem_req) {
+        s_nem_req = 0;
+        if (rl_ms() - s_nem_req_ms < 2000.0)
+            nemesis_kill_run();
+    }
+    if (s_rally_req) {
+        s_rally_req = 0;
+        if (rl_ms() - s_rally_req_ms < 2000.0)
+            rally_fill_run();
+    }
+}
+
+void game_pc_note(uint32_t pc) { extern void game_reload_poll(uint32_t); game_pc_val = pc; game_reload_poll(pc); autoswitch_poll(pc); body_probe(pc); cheats_poll(pc); }
 static uint32_t proj_obj[24];
 static unsigned proj_cnt[24];
 static unsigned proj_made;
@@ -3072,6 +4547,54 @@ static void fire_gate_note(uint32_t weapon, float spd)
         g_mkb_gate_until_ms = now + (double)ms;
 }
 
+/* TEAM-PROBE (RECOMP_TEAM_PROBE=1): which soldiers are friends? sub_000F9480 stores the def's Team value into obj+0xD8
+ * (Team 1 -> 6, Team 2 -> 3, else 0). One [TEAM] line per owner at its first bullet and then every 10th, up to 700 lines:
+ * owner, vtable, +0xD8, distance to the player, angle between the bullet and the line to the player (enemies aim at the player,
+ * friends do not), player's own +0xD8. Player position = player object +0x90. */
+static void team_probe(uint32_t sp, uint32_t owner)
+{
+    static int on = -1;
+    static uint32_t seen[96];
+    static unsigned cnt[96], nseen, lines;
+    uint32_t dir, pos, row, i;
+    float t[3], d[3], dist, dn, dot, ang;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_TEAM_PROBE");
+        on = e && *e && *e != '0';
+    }
+    if (!on || lines >= 700 || game_pc_val < 0x80000000u || owner < 0x80000000u || (owner >= game_pc_val && owner < game_pc_val + 0x100))
+        return;
+    dir = MEM32(sp + 0x14);
+    pos = MEM32(sp + 0x10);
+    row = MEM32(sp + 0xC);
+    if (dir < 0x1000u || pos < 0x1000u)
+        return;
+    for (i = 0; i < nseen; i++)
+        if (seen[i] == owner)
+            break;
+    if (i == nseen) {
+        if (nseen >= 96)
+            return;
+        seen[nseen++] = owner;
+    }
+    if (cnt[i]++ % 10u)
+        return;
+    t[0] = shot_f(game_pc_val + 0x90) - shot_f(pos);
+    t[1] = shot_f(game_pc_val + 0x94) - shot_f(pos + 4);
+    t[2] = shot_f(game_pc_val + 0x98) - shot_f(pos + 8);
+    d[0] = shot_f(dir); d[1] = shot_f(dir + 4); d[2] = shot_f(dir + 8);
+    dist = sqrtf(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]);
+    dn = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (dist < 0.5f || dn < 0.01f)
+        return;
+    dot = (t[0] * d[0] + t[1] * d[1] + t[2] * d[2]) / (dist * dn);
+    ang = acosf(dot > 1.0f ? 1.0f : (dot < -1.0f ? -1.0f : dot)) * 57.29578f;
+    lines++;
+    fprintf(stderr, "[TEAM] owner %08X vt %08X d8 %u dist %.1f angle %.1f shot %u def %08X damage %g player_d8 %u\n", owner, MEM32(owner),
+            MEM32(owner + 0xD8), (double)dist, (double)ang, cnt[i], row >= 0x80000000u ? MEM32(row) : 0u,
+            row >= 0x80000000u ? (double)shot_f(row + 8) : 0.0, MEM32(game_pc_val + 0xD8));
+}
+
 void game_proj_fix(uint32_t sp)
 {
     static int on = -1;
@@ -3079,6 +4602,9 @@ void game_proj_fix(uint32_t sp)
     uint32_t owner, dir;
     float spd, nx, ny, nz, h, pitch, kick, np, ang;
     uint32_t w;
+    int heavy = 0;
+    team_probe(sp, MEM32(sp + 0x24));
+    { extern void game_friend_aim(uint32_t owner, uint32_t dir); game_friend_aim(MEM32(sp + 0x24), MEM32(sp + 0x14)); }
     if (on < 0) {
         const char *e = getenv("RECOMP_AIM_FIX");
         on = !(e && *e == '0');
@@ -3090,7 +4616,33 @@ void game_proj_fix(uint32_t sp)
         return;
     w = MEM32(sp + 0x18);
     memcpy(&spd, &w, 4);
-    {   uint32_t sol = MEM32(game_pc_val + 0x1CC);
+    {   /* the bullet's ballistics row (sp + 0xC): row +0 = the weapon's id, +8 damage, +0x14 range. A heavy single-shot rifle
+         * (by name, see game_weapon_is_heavy) gets the same aim fix as the Karabiner whatever its muzzle speed is. */
+        extern int game_weapon_is_heavy(uint32_t row_id, char *name_out, size_t name_sz);
+        static uint32_t seen[48];
+        static int nseen;
+        uint32_t row = MEM32(sp + 0xC), id = row >= 0x80000000u ? MEM32(row) : 0;
+        char nm[32] = "";
+        int i;
+        heavy = id && game_weapon_is_heavy(id, nm, sizeof nm);
+        {   /* a gun shot for the auto switch: not a grenade (Stick, Brit, Frag, ... by name; with no name the grenade's row has
+             * the 300-frame fuse where a bullet has a range under 250). A bazooka rocket counts. */
+            int gren = !_stricmp(nm, "Stick") || !_stricmp(nm, "Brit") || !_stricmp(nm, "Frag") || strstr(nm, "renade");
+            if (!gren && (nm[0] || (row >= 0x80000000u && shot_f(row + 0x14) < 250.0f)))
+                s_ab_last_bullet_ms = rl_ms();
+        }
+        for (i = 0; i < nseen; i++)
+            if (seen[i] == id)
+                break;
+        if (i == nseen && nseen < 48) {
+            seen[nseen++] = id;
+            fprintf(stderr, "[WEAPON] id %08X name '%s' speed %g damage %g range %g -> %s\n", id, nm, (double)spd,
+                    row >= 0x80000000u ? (double)shot_f(row + 8) : 0.0, row >= 0x80000000u ? (double)shot_f(row + 0x14) : 0.0,
+                    heavy || (spd > 6.5f && spd < 50.0f) ? "aim fix" : "no aim fix");
+        }
+    }
+    if (!heavy) {
+        uint32_t sol = MEM32(game_pc_val + 0x1CC);
         fire_gate_note(sol >= 0x80000000u ? MEM32(sol + 0x1128) : 0, spd);
     }
     {   /* BULLET: when each of the player's projectiles is made (fire cadence), ms on a high-resolution clock */
@@ -3103,7 +4655,7 @@ void game_proj_fix(uint32_t sp)
                     pp >= 0x1000u ? (double)shot_f(pp + 8) : 0.0, (double)shot_f(0x373268), game_fire_get());
         }
     }
-    if (!(spd > 6.5f && spd < 50.0f))
+    if (!(spd > 6.5f && spd < 50.0f) && !(heavy && spd > 0.5f && spd < 50.0f))
         return;
     dir = MEM32(sp + 0x14);
     if (dir < 0x1000u) { aimfix_log(1, spd, 0, 0, 0, game_pc_val); return; }
@@ -3423,4 +4975,6 @@ uint32_t game_lod_level(uint32_t req, uint32_t level)
 /* The AI tuning and aim code is in its own files but compiled as part of this one: the profile-guided build only
  * links the object files that existed when the profile was recorded. */
 #include "ai_tuning.c"
+#include "game_sfx.c"
 #include "ai_aim.c"
+#include "blood_stain.c"                                           /* BLOOD-STAIN: stains on walls and floor (decal system) */

@@ -1,30 +1,49 @@
-KNOWN ISSUES - 0.9.2-beta
+KNOWN ISSUES - 0.9.3-beta
 =========================
 
-* Only the USA / NTSC-U version of the game is supported (the launcher checks DEFAULT.XBE).
+* MAP EDITOR IS EXPERIMENTAL (off by default). It may show bugs, and in rare cases it can crash or freeze the game,
+  especially with many placed soldiers or when changing levels. Your edits live in mods\maps\<level>.txt; if a level
+  misbehaves, turn the editor off (F1 > Mods and tools) or delete that level's file. Limits: 16 living editor soldiers,
+  no prop rotation, no weapons from other levels, zones cannot be edited after placing, zone rings show through walls,
+  soldiers can be born inside crates, the drag preview is a stand-in shape, the level's own pickups cannot be removed,
+  window text is English only, no launcher row.
 * Sound may rarely vanish in long sessions (a stuck software mix buffer). A guard restarts it automatically;
   if the sound is gone for good, save and restart the game, and please attach play_log.txt to a report.
+  If a sound fades or vanishes when you turn the camera to one side, open F1 > Audio > Stereo sound and switch it to Mono
+  (the game's own mix puts a side sound in one ear only; Mono feeds both ears, but left / right / behind can no longer be told apart).
+* If the game crashes: open a GitHub issue and attach crash.txt, crash.dmp and play_log.txt from the game folder (or use
+  the launcher's "Report a problem" button, which makes MoH_report.zip). Say how long you had been playing and whether
+  you use overlays (RTSS, Discord, Steam, ReShade). Crashes after a long session are still being investigated.
+* If parts of the ground turn pure black, press F2 while it is black and attach play_log.txt and the screenshot to an issue.
 * 60 to 165 fps run well on the author's PC (RTX 4060). 240 fps and weaker PCs can still stutter in busy scenes;
-  pick a lower frame rate and attach play_log.txt (it holds frame-time lines).
+  pick a lower frame rate and attach play_log.txt (it holds frame-time lines). Busy places can fall below the
+  best frame rate, especially with the map editor, a wide view (21:9) or "Weapon lighting" on High / Extreme.
 * First run and new areas compile shaders (short stutters); they are cached in shader_cache\.
-* Enemy count (x2 to x5) is experimental and heavy: it can cost frames, may not complete a "kill every enemy"
+* "Corpse fix (60 Hz physics)" (off by default) stops bodies flying at high fps but can freeze or crash the game.
+* Enemy count (x2 to x5) is heavy: it can cost frames, may not complete a "kill every enemy"
   objective as expected, and can crowd the sound mixer. Keep it low on a slower PC.
+* Enemy grenades is on Low by default: enemies who shoot at you sometimes throw a grenade. It has no throw animation
+  (the grenade appears at the soldier's hand). Set it to Off in Recomp Settings (F1) > Gameplay if you do not want it.
 * Model detail "Higher" / "Highest" draws better models farther away; its frame cost is not measured on every PC.
-* The Karabiner fix covers the player's fast bullets (muzzle speed 6.5 to 50). The Karabiner is confirmed; other
-  bolt rifles of later levels share its class but were not each tested.
+* The Karabiner fix covers the player's fast bullets. The Karabiner is confirmed; other heavy rifles share its class
+  but were not each tested.
 * At 30 fps the sniper-scope zoom can look like a cut instead of a smooth transition.
 * Enemy accuracy, reaction time and sight range cannot be changed (the game does not expose them).
 * The Arabic language is experimental: only part of the text is translated, the rest stays English.
 * Needs a GPU with Direct3D 11 (feature level 11.0) and the Visual C++ Redistributable (the launcher tells you if it is missing).
 * Soldiers may freeze or respawn doubled when "Keep corpses" (experimental) is on.
-* In the mission-select screen the mouse pointer does not follow every list entry; use the keyboard or gamepad there.
 * Weapon mods: only magazine size is confirmed; damage, range, fire rate and max ammo are experimental. Sound replacement
-  mods are untested end to end. DDS texture replacements: uncompressed and DXT1/3/5 only (BC4-BC7 are not read).
+  mods are untested end to end. DDS texture replacements: uncompressed, DXT1/3/5, BC4, BC5 and BC7 work; BC6H does not.
+* Multiplayer: local split-screen works. There is NO online / LAN play, NO bots and NO campaign co-op: the original
+  game has no network code and no bot AI, and the campaign is scripted for one player.
 * Windows SmartScreen / antivirus may warn about the unsigned executables (false positive).
 
 Report others here: https://github.com/boodyandmustafa-create/MOH-EuropeanAssault-PC-Port/issues
-Please attach play_log.txt (and play_log_prev.txt).
+Please attach play_log.txt (and play_log_prev.txt, crash.txt and crash.dmp if the game crashed).
 
-المشاكل المعروفة: النسخة الأمريكية فقط - قد يختفي الصوت نادراً في الجلسات الطويلة - 60 حتى 165 إطاراً تعمل جيداً على جهاز المطوّر
-وقد تتقطع 240 والأجهزة الأضعف - عدد الأعداء x2-x5 تجريبي وثقيل - جودة النماذج الأعلى قد تكلّف إطارات - تكبير المنظار عند 30 إطاراً
-قد يبدو قطعاً - دقة الأعداء غير قابلة للتعديل - الترجمة العربية تجريبية - تحذيرات SmartScreen متوقعة.
+المشاكل المعروفة: محرر الخرائط تجريبي وقد يكرش اللعبة أو يجمّدها نادراً (أطفئه أو احذف ملف المرحلة من mods\maps) - قد يختفي الصوت
+نادراً في الجلسات الطويلة؛ إن اختفى صوت عند تدوير الكاميرا غيّر Stereo sound إلى Mono من F1 > Audio - عند الكراش أرفق crash.txt و
+crash.dmp و play_log.txt في GitHub Issues - إن صارت الأرض سوداء اضغط F2 وأرفق اللقطة واللوغ - 60 حتى 165 إطاراً تعمل جيداً على جهاز
+المطوّر، وقد تتقطع الأجهزة الأضعف و240 إطاراً - الأماكن الثقيلة قد تنزل مع المحرر والشاشة 21:9 وإضاءة السلاح العالية - Corpse fix
+مطفأ افتراضياً وقد يجمّد اللعبة - قنابل الأعداء على "منخفض" افتراضياً ويمكن إطفاؤها من F1 - عدد الأعداء x2-x5 ثقيل - الترجمة العربية
+تجريبية - اللعب الجماعي: شاشة مقسومة محلية فقط، لا أونلاين ولا بوتات ولا تعاون حملة - تحذيرات SmartScreen متوقعة.

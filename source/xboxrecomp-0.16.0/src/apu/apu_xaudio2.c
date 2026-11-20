@@ -140,8 +140,11 @@ fail:
     return 0;
 }
 
+static void xa2_sfx_shutdown(void);
+
 void xa2_shutdown(void)
 {
+    xa2_sfx_shutdown();
     if (g_xa2_source) {
         IXAudio2SourceVoice_Stop(g_xa2_source, 0, XAUDIO2_COMMIT_NOW);
         IXAudio2SourceVoice_FlushSourceBuffers(g_xa2_source);
@@ -268,6 +271,132 @@ uint64_t xa2_samples_played(void)
     if (!g_xa2_initialized || !g_xa2_source) return 0;
     IXAudio2SourceVoice_GetState(g_xa2_source, &state, 0);
     return state.SamplesPlayed;
+}
+
+/* ---- Effect voices (game sounds of our own: pain, breathing) ----
+ * A few extra source voices on the same mastering voice, apart from the emulated APU's mix. XAudio2 mixes them on its own
+ * thread, so playing one costs the game thread a few calls. The caller keeps the sample buffer alive while it plays
+ * (the effects are loaded once at start-up and never freed). */
+#define XA2_SFX_GENERAL 6                      /* voices 0..5 serve xa2_sfx_play; the last one is kept for the breathing loop */
+#define XA2_SFX_VOICES  (XA2_SFX_GENERAL + 1)
+static IXAudio2SourceVoice *g_sfx_v[XA2_SFX_VOICES];
+static int                  g_sfx_loop[XA2_SFX_VOICES];
+static int                  g_sfx_tried = 0;
+
+static int xa2_sfx_ready(void)
+{
+    WAVEFORMATEX wfx = { 0 };
+    int i;
+
+    if (g_sfx_v[0]) return 1;
+    if (g_sfx_tried || !g_xa2_initialized || !g_xa2) return 0;
+    g_sfx_tried = 1;
+    wfx.wFormatTag      = WAVE_FORMAT_PCM;
+    wfx.nChannels       = 2;
+    wfx.nSamplesPerSec  = XA2_SAMPLE_RATE;
+    wfx.wBitsPerSample  = 16;
+    wfx.nBlockAlign     = 4;
+    wfx.nAvgBytesPerSec = XA2_SAMPLE_RATE * 4;
+    for (i = 0; i < XA2_SFX_VOICES; i++) {
+        if (FAILED(IXAudio2_CreateSourceVoice(g_xa2, &g_sfx_v[i], &wfx, 0, XAUDIO2_DEFAULT_FREQ_RATIO, NULL, NULL, NULL))) {
+            fprintf(stderr, "[XA2] effect voice %d failed\n", i);
+            while (i-- > 0) { g_sfx_v[i]->lpVtbl->DestroyVoice(g_sfx_v[i]); g_sfx_v[i] = NULL; }
+            return 0;
+        }
+        IXAudio2SourceVoice_Start(g_sfx_v[i], 0, XAUDIO2_COMMIT_NOW);
+    }
+    return 1;
+}
+
+/* Play interleaved stereo 48 kHz 16-bit frames on a free effect voice. vol 0..1+, pan -1 (left) .. 1 (right), loop != 0 plays
+ * until xa2_sfx_stop. Returns a handle (voice + 1) or 0 when every voice is busy. */
+int xa2_sfx_play(const int16_t *stereo48k, int frames, float vol, float pan, int loop)
+{
+    XAUDIO2_VOICE_STATE st;
+    XAUDIO2_BUFFER xb;
+    float m[4], l, r;
+    int i;
+
+    if (!stereo48k || frames <= 0 || !xa2_sfx_ready()) return 0;
+    for (i = 0; i < XA2_SFX_GENERAL; i++) {
+        IXAudio2SourceVoice_GetState(g_sfx_v[i], &st, XAUDIO2_VOICE_NOSAMPLESPLAYED);
+        if (st.BuffersQueued == 0) break;
+    }
+    if (i == XA2_SFX_GENERAL) return 0;
+    if (pan < -1.0f) pan = -1.0f;
+    if (pan > 1.0f) pan = 1.0f;
+    l = pan > 0.0f ? 1.0f - pan : 1.0f;             /* equal-gain balance: only the far side is turned down */
+    r = pan < 0.0f ? 1.0f + pan : 1.0f;
+    m[0] = l; m[1] = 0.0f; m[2] = 0.0f; m[3] = r;   /* L->L, R->L, L->R, R->R */
+    g_sfx_v[i]->lpVtbl->SetVolume(g_sfx_v[i], vol, XAUDIO2_COMMIT_NOW);
+    g_sfx_v[i]->lpVtbl->SetOutputMatrix(g_sfx_v[i], NULL, 2, 2, m, XAUDIO2_COMMIT_NOW);
+    memset(&xb, 0, sizeof xb);
+    xb.AudioBytes = (UINT32)frames * 4u;
+    xb.pAudioData = (const BYTE *)stereo48k;
+    if (loop) xb.LoopCount = XAUDIO2_LOOP_INFINITE;
+    if (FAILED(IXAudio2SourceVoice_SubmitSourceBuffer(g_sfx_v[i], &xb, NULL))) return 0;
+    g_sfx_loop[i] = loop ? 1 : 0;
+    return i + 1;
+}
+
+/* The breathing voice: one clip at a time, volume changed while it plays (fade in / out). */
+int xa2_sfx_breath_busy(void)
+{
+    XAUDIO2_VOICE_STATE st;
+    if (!xa2_sfx_ready()) return 0;
+    IXAudio2SourceVoice_GetState(g_sfx_v[XA2_SFX_GENERAL], &st, XAUDIO2_VOICE_NOSAMPLESPLAYED);
+    return st.BuffersQueued != 0;
+}
+
+int xa2_sfx_breath_play(const int16_t *stereo48k, int frames, float vol)
+{
+    XAUDIO2_BUFFER xb;
+    IXAudio2SourceVoice *v;
+    if (!stereo48k || frames <= 0 || !xa2_sfx_ready() || xa2_sfx_breath_busy()) return 0;
+    v = g_sfx_v[XA2_SFX_GENERAL];
+    v->lpVtbl->SetVolume(v, vol, XAUDIO2_COMMIT_NOW);
+    memset(&xb, 0, sizeof xb);
+    xb.AudioBytes = (UINT32)frames * 4u;
+    xb.pAudioData = (const BYTE *)stereo48k;
+    return SUCCEEDED(IXAudio2SourceVoice_SubmitSourceBuffer(v, &xb, NULL));
+}
+
+void xa2_sfx_breath_volume(float vol)
+{
+    IXAudio2SourceVoice *v = g_sfx_v[XA2_SFX_GENERAL];
+    if (v) v->lpVtbl->SetVolume(v, vol, XAUDIO2_COMMIT_NOW);
+}
+
+void xa2_sfx_breath_stop(void)
+{
+    IXAudio2SourceVoice *v = g_sfx_v[XA2_SFX_GENERAL];
+    if (!v) return;
+    IXAudio2SourceVoice_Stop(v, 0, XAUDIO2_COMMIT_NOW);
+    IXAudio2SourceVoice_FlushSourceBuffers(v);
+    IXAudio2SourceVoice_Start(v, 0, XAUDIO2_COMMIT_NOW);
+}
+
+static void xa2_sfx_shutdown(void)
+{
+    int i;
+    for (i = 0; i < XA2_SFX_VOICES; i++) {
+        if (g_sfx_v[i]) {
+            IXAudio2SourceVoice_Stop(g_sfx_v[i], 0, XAUDIO2_COMMIT_NOW);
+            g_sfx_v[i]->lpVtbl->DestroyVoice(g_sfx_v[i]);
+            g_sfx_v[i] = NULL;
+        }
+    }
+    g_sfx_tried = 0;
+}
+
+void xa2_sfx_stop(int handle)
+{
+    int i = handle - 1;
+    if (i < 0 || i >= XA2_SFX_VOICES || !g_sfx_v[i]) return;
+    IXAudio2SourceVoice_Stop(g_sfx_v[i], 0, XAUDIO2_COMMIT_NOW);
+    IXAudio2SourceVoice_FlushSourceBuffers(g_sfx_v[i]);
+    IXAudio2SourceVoice_Start(g_sfx_v[i], 0, XAUDIO2_COMMIT_NOW);
+    g_sfx_loop[i] = 0;
 }
 
 #else /* !_WIN32: apu_sdl2.c implements the same contract over SDL2 */

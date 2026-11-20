@@ -103,7 +103,27 @@ typedef struct {
     int fog_enable;
     uint32_t fog_mode;
     float fog_param[2];
+    float hud_k;                /* ultrawide HUD batch: x around the picture's centre times this (0 = off) */
+    float hud_shift;            /* ... and moved by this fraction of the picture width (edge anchoring, per batch) */
+    int weapon;                 /* a first-person weapon draw (inside the stream markers of the weapon pass): lit by nv2a_gpu_weapon_* */
 } Nv2aGpuProgram;
+
+/* WEAPON LIGHTING (the first-person weapon, like a modern shooter): the game side puts a marker (a NO_OPERATION method with
+ * magic 0x57504Cxx) into the pushbuffer where the weapon pass begins and ends; the executor sets g_nv_wpn_pass while it is
+ * between them and the weapon's opaque draws get a pixel shader variant that adds environment light and reflection (from a
+ * 256x144 mip copy of the last presented frame) and dirt, blood and rain drops. level 0 = off, 1..3 = low / normal / high. */
+extern volatile int g_nv_wpn_pass;
+void nv2a_gpu_weapon_config(int level);
+int  nv2a_gpu_weapon_level(void);
+void nv2a_gpu_weapon_view(float tan_h, float tan_v);   /* tan of the weapon pass projection's half angles, across / down (game side) */
+void nv2a_gpu_weapon_trigger(int kind, float strength);   /* 0 = blood, 1 = dust; any thread */
+void nv2a_gpu_weapon_rain(float strength);                /* 0 = dry; any thread, every ~100 ms while it rains */
+void nv2a_gpu_weapon_get_tan(float *h, float *v);          /* what the weapon shader uses (for the log) */
+void nv2a_gpu_weapon_clean(void);                         /* wipe the weapon (a level load) */
+void nv2a_gpu_weapon_blood_color(float r, float g, float b);   /* the blood colour setting, 0..1 */
+void nv2a_gpu_weapon_frame_end(void);                     /* every flip: the blink detector (nv2a_pb_exec.c) */
+void nv2a_gpu_weapon_aim(float f);                       /* 0 = hip, 1 = aiming down the sights (the gun is in the middle of the view) */
+void nv2a_gpu_weapon_offset(float x, float y);            /* where the gun sits on the screen now, in view units (0.45 m * angle): the drops and blood follow it */
 
 /* RECOMP_GPU_VS_CHECK: the next nv2a_gpu_draw_program also writes its
  * vertices' outputs to out, 34 floats each (pos as the rasteriser gets it,
@@ -152,5 +172,21 @@ void nv2a_gpu_frame(void);
 int nv2a_gpu_present(uint32_t va, uint32_t logical_w, uint32_t logical_h,
                      float aa_sx, float aa_sy, void *hwnd);
 void nv2a_gpu_present_stop(void);   /* back to the window thread */
+/* HUD bar drawn into the presented picture (any thread, call every frame it is wanted; gone 200 ms after the last call).
+ * x, y = top-left, h = height, aspect = width / height, all fractions of the picture; fill 0..1 rises from the bottom. */
+void nv2a_gpu_hud_bar(float x, float y, float h, float aspect, float fill);
+/* Hit marker drawn into the presented picture: an X at the centre for about 320 ms; kind 1 = white (hit), 2 = red (kill). */
+void nv2a_gpu_hud_hitmark(int kind);
+
+/* Ultrawide (RECOMP_ASPECT = "21:9", "2.37" or "auto"; see nv2a_gpu.c). recomp_wide_target: the configured gameplay shape (0 =
+ * plain 16:9). recomp_wide_frame: the game side says the gameplay picture it is drawing now has this shape (0 = normal).
+ * recomp_present_aspect: the presenters' shape for the frame (dflt without ultrawide). recomp_wide_set_gate: a callback that
+ * returns 0 while a menu is up (the picture is then 16:9). recomp_wide_client: the presenters report the window's client size. */
+float recomp_wide_target(void);
+void  recomp_wide_frame(float asp);
+float recomp_present_aspect(float dflt);
+float recomp_wide_hud_k(void);   /* 2D HUD squeeze (and edge anchoring) in a wide picture (0 = none) */
+void  recomp_wide_set_gate(int (*gate)(void));
+void  recomp_wide_client(unsigned cw, unsigned ch);
 
 #endif /* NV2A_GPU_H */

@@ -3,10 +3,10 @@
 Send the tester the zip and its SHA-256. Ask them to follow this list and send back `play_log.txt` and a note of anything odd.
 
 1. Unzip to a folder **without** spaces/special characters in its path (e.g. `C:\Games\MoH`). Check the SHA-256 of the zip.
-2. Copy `DEFAULT.XBE`, `DATA\` and `EAGLRM.O` of the *USA* game into `game\`.
+2. Copy `DEFAULT.XBE`, `DATA\` and `EAGLRM.O` of your game (USA or European) into `game\`.
 3. Start `Launcher.exe`:
    - [ ] the window opens (if it says system files are missing, note which and install what it links)
-   - [ ] the Play tab shows every file "Found" and "USA (NTSC-U)"
+   - [ ] the Play tab shows every file "Found" and the game version as recognised (USA or European)
    - [ ] Game tab: resolution is the monitor's size (max 2560x1440), 60 fps, draw distance 2
 4. Press PLAY:
    - [ ] the first start takes a while (shaders) – note how long

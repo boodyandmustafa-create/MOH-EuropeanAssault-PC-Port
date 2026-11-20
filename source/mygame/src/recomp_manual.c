@@ -185,6 +185,20 @@ void recomp_icall_not_code_log(uint32_t va)
                     "(null or wild function pointer, at call #%llu)\n",
             va, (unsigned long long)hits[i],
             (unsigned long long)g_icall_count);
+    {   /* where it was called from: the return address the call site pushed just before the check (esp is g_esp in generated code) */
+        static int site_lines;
+        uint32_t sp = g_esp;
+        if (site_lines < 12 && sp >= 0x10000u && sp < 0x84000000u - 0x40u) {
+            site_lines++;
+            fprintf(stderr, "[ICALL]   site ret=%08X stack %08X %08X %08X %08X eax %08X\n",
+                    (unsigned)*(volatile uint32_t *)((uintptr_t)g_xbox_mem_offset + sp),
+                    (unsigned)*(volatile uint32_t *)((uintptr_t)g_xbox_mem_offset + sp + 4u),
+                    (unsigned)*(volatile uint32_t *)((uintptr_t)g_xbox_mem_offset + sp + 8u),
+                    (unsigned)*(volatile uint32_t *)((uintptr_t)g_xbox_mem_offset + sp + 12u),
+                    (unsigned)*(volatile uint32_t *)((uintptr_t)g_xbox_mem_offset + sp + 16u),
+                    (unsigned)g_eax);
+        }
+    }
     fflush(stderr);
 }
 
@@ -627,7 +641,17 @@ float game_view_fov_deg(void) { return s_fovrole[0].to; }
 extern volatile LONG g_mkb_zoom_steps;
 static float s_zoom_tgt = 1.0f, s_zoom_cur = 1.0f;
 extern volatile int g_mkb_scoped;
-static int scope_up(void) { return s_fovrole[0].to > 1.0f && s_fovrole[0].to < 60.0f; }
+int game_held_weapon_scoped(void);
+/* A scope is up when the game's fov is under 60, or (a level's first scope, before any zoom: the game opens it at the iron
+ * sights' 68 degrees) when Aim is held with a sniper in the hands and the fov has settled under 70. */
+static int scope_up(void)
+{
+    float to = s_fovrole[0].to;
+    extern volatile int g_mkb_aim_held;
+    if (to > 1.0f && to < 60.0f)
+        return 1;
+    return g_mkb_aim_held && to >= 60.0f && to < 70.0f && game_held_weapon_scoped();
+}
 int game_scope_up(void) { return scope_up(); }
 float game_zoom_scale(void) { return scope_up() ? s_zoom_cur : 1.0f; }
 extern volatile unsigned g_mkb_last_btn;
@@ -635,6 +659,13 @@ static void zoom_frame(void)
 {
     LONG st = InterlockedExchange(&g_mkb_zoom_steps, 0);
     g_mkb_scoped = scope_up();
+    {   extern volatile int g_mkb_gren_held;        /* GRENADE MACRO: is a grenade in the hands (1) / a gun (0) / not known (-1) */
+        extern volatile unsigned g_mkb_held_weapon; /* ... and which weapon object is held (0 = not known), to bring the gun back after the throw */
+        int game_held_weapon_grenade(void);
+        unsigned game_held_weapon_obj(void);
+        g_mkb_gren_held = game_held_weapon_grenade();
+        g_mkb_held_weapon = game_held_weapon_obj();
+    }
     {   /* ZOOMPROBE: while a scope is up, every change of the game's own fov with the pad / key state at that moment */
         static float last;
         static unsigned n;
@@ -644,6 +675,24 @@ static void zoom_frame(void)
             fprintf(stderr, "[ZOOMPROBE] game fov %.2f -> %.2f buttons %06X\n", (double)last, (double)to, g_mkb_last_btn);
         }
         last = to;
+    }
+    {   /* SCOPEDIAG: the four fov roles while the Aim button is held (what the game's fov is when a scope opens, before any zoom) */
+        extern volatile int g_mkb_aim_held;
+        static float lr[FOV_ROLES];
+        static int was_aim;
+        static unsigned n;
+        int aim = g_mkb_aim_held, k, ch = aim != was_aim;
+        for (k = 0; k < FOV_ROLES; k++)
+            if (fabsf(s_fovrole[k].to - lr[k]) > 0.05f)
+                ch = 1;
+        if ((aim || was_aim) && ch && n < 400) {
+            n++;
+            fprintf(stderr, "[SCOPEDIAG] aim=%d scope_up=%d roles %.2f %.2f %.2f %.2f\n", aim, scope_up(),
+                    (double)s_fovrole[0].to, (double)s_fovrole[1].to, (double)s_fovrole[2].to, (double)s_fovrole[3].to);
+        }
+        was_aim = aim;
+        for (k = 0; k < FOV_ROLES; k++)
+            lr[k] = s_fovrole[k].to;
     }
     if (!scope_up()) {
         s_zoom_tgt = s_zoom_cur = 1.0f;
@@ -680,6 +729,44 @@ static FovRole *fov_next_role(void)
  * for characters and other objects read those. Widening the two half angles here (same zoom ratio against
  * the 70 degree view as before) makes every reader see the new view; jumps are eased per call position. */
 static void draw_poll(void);
+
+/* ULTRAWIDE (RECOMP_ASPECT, nv2a_gpu.c): how much wider the player's view is than the game's own 16:9 one, for a view whose
+ * aspect (tan h / tan v) the game made 16:9. 1 for everything else, and while a menu is up (the picture is then 16:9).
+ * Also tells the presenters the shape of the picture of this frame. */
+extern float recomp_wide_target(void);
+extern void recomp_wide_frame(float asp);
+extern void recomp_wide_set_gate(int (*gate)(void));
+extern int recomp_menu_up(void);
+static int wide_gate(void) { return !recomp_menu_up(); }
+static float wide_view_factor(float game_aspect)
+{
+    static int reg;
+    float t;
+    if (!reg) {
+        reg = 1;
+        recomp_wide_set_gate(wide_gate);
+    }
+    t = recomp_wide_target();
+    if (recomp_menu_up() || game_aspect < 1.70f || game_aspect > 1.85f) {
+        recomp_wide_frame(0.0f);
+        return 1.0f;
+    }
+    if (t <= 0.0f) {                            /* plain widescreen gameplay: still marked, so the HUD proportions option knows */
+        recomp_wide_frame(game_aspect);
+        return 1.0f;
+    }
+    recomp_wide_frame(t);
+    return t / game_aspect;
+}
+
+/* WEAPON LIGHTING: 1 while the game thread is between the weapon pass's view updates (0xF463F .. 0xF46DD, see gun_sway_view). */
+static int s_wp_in_pass;
+extern void nv2a_gpu_weapon_view(float tan_h, float tan_v);
+extern void nv2a_gpu_weapon_clean(void);
+extern void nv2a_gpu_weapon_blood_color(float r, float g, float b);
+extern void nv2a_gpu_weapon_aim(float f);
+static void game_blood_main_rgb(float rgb[3]);             /* the Blood colour setting's main colour, 0..1 (defined with the colour code) */
+
 void sub_0018B480_enter(void)
 {
     float h, v, tanh_, tanv, deg, wide, s;
@@ -687,10 +774,12 @@ void sub_0018B480_enter(void)
     double now;
     fov_poll();
     draw_poll();
-    if (s_fov_mode != 2)
-        return;
     h = guest_f(g_esp + 4);
     v = guest_f(g_esp + 8);
+    if (s_wp_in_pass && h > 0.01f && h < 1.45f && v > 0.01f && v < 1.45f)
+        nv2a_gpu_weapon_view(tanf(h), tanf(v));  /* the weapon lighting needs the weapon pass's own view cone (widened below when it is) */
+    if (s_fov_mode != 2)
+        return;
     if (!(h > 0.01f && h < 1.45f && v > 0.01f && v < 1.45f))
         return;
     tanh_ = (float)tan((double)h);
@@ -734,8 +823,48 @@ void sub_0018B480_enter(void)
         }
         (void)lines;
     }
-    guest_set_f(g_esp + 4, (float)atan(tanh_ * s));
+    {   /* ULTRAWIDE: only the horizontal half angle grows (the vertical view stays); the camera's aspect (+0xB8 / +0xBC) and
+         * so the projection and every visibility test follow from these two angles */
+        float k = wide_view_factor(tanh_ / tanv);
+        guest_set_f(g_esp + 4, (float)atan(tanh_ * s * k));
+        if (s_wp_in_pass)
+            nv2a_gpu_weapon_view(tanh_ * s * k, tanv * s);
+    }
     guest_set_f(g_esp + 8, (float)atan(tanv * s));
+}
+
+/* Every guest dword outside [skip_lo, skip_hi) that equals target: who holds a pointer to an object (low memory + the heap
+ * window). Used by the corpse research (RECOMP_HOLDERS=1) to see which lists / slots a soldier's delete clears. Slow
+ * (about 64 MB), so diagnostic only. */
+int game_scan_holders(uint32_t target, uint32_t skip_lo, uint32_t skip_hi, uint32_t *out, int max)
+{
+    static const uint32_t regions[][2] = { {0x00000000u, 0x00800000u}, {0x80000000u, 0x84000000u} };
+    int hits = 0, r;
+    for (r = 0; r < 2; r++) {
+        uint32_t va = regions[r][0];
+        while (va < regions[r][1] && hits < max) {
+            MEMORY_BASIC_INFORMATION mbi;
+            uintptr_t host = (uintptr_t)va + g_xbox_mem_offset;
+            uint32_t n;
+            if (!VirtualQuery((void *)host, &mbi, sizeof mbi))
+                break;
+            n = (uint32_t)((uintptr_t)mbi.BaseAddress + mbi.RegionSize - host);
+            if (mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) && mbi.Protect != 0) {
+                const uint32_t *p = (const uint32_t *)host;
+                uint32_t off, cnt = n / 4;
+                for (off = 0; off < cnt && va + off * 4 < regions[r][1] && hits < max; off++)
+                    if (p[off] == target) {
+                        uint32_t at = va + off * 4;
+                        if (at < skip_lo || at >= skip_hi)
+                            out[hits++] = at;
+                    }
+            }
+            if (n == 0)
+                break;
+            va += n;
+        }
+    }
+    return hits;
 }
 
 /* RECOMP_FOV_SCAN=1: once, some seconds into a level, list every guest dword that still holds the game's
@@ -784,6 +913,896 @@ static void fov_scan(float rawdeg, float aspect)
     fprintf(stderr, "[SCAN] done, %d hits (raw %.3f deg, aspect %.3f)\n", hits, rawdeg, aspect);
 }
 
+/* GUN SWAY: the game fixes the weapon to the camera, so it turns with the view like a rigid stick. The weapon is drawn in the
+ * view update's third call of a frame (return 0xF463F, a narrower fov), and the world again after the fourth (0xF46DD). The
+ * camera transform sits at params + 0xD0: a 3x3 whose COLUMNS are the camera's right / up / forward axes, in rows of four floats,
+ * and a translation row (0x100) = -eye * rotation. Each frame (first call, return 0x80D67) the turn since the last frame is read
+ * from that matrix; a spring-damper chases it, and for the weapon call only the camera is turned on by the spring's lag
+ * (R' = R * exp(lag), t' = t * exp(lag)), so the gun swings behind the view and catches up with a little overshoot. The
+ * transform is put back before the fourth call. Costs a few dozen float operations a frame.
+ * RECOMP_GUN_SWAY=0/1 (ini gun_sway), RECOMP_GUN_SWAY_STRENGTH=1..5 (ini gun_sway_strength), RECOMP_GUN_SWAY_LOG=1. */
+typedef struct {
+    uint32_t view;
+    int have, applied;
+    float m[9], saved[16];
+    float scale;                                /* strength this frame, kept for the weapon call */
+    float lag[2], vel[2];                       /* camera-space lag of the weapon behind the view (rad): about the right axis, about the up axis */
+    double t;
+} GunSway;
+static GunSway s_gs[2];
+static int s_gs_on = -1, s_gs_str = 3, s_gs_log;
+
+static void gs_cfg(void)
+{
+    const char *e;
+    if (s_gs_on >= 0)
+        return;
+    e = getenv("RECOMP_GUN_SWAY");
+    s_gs_on = !(e && e[0] == '0');
+    e = getenv("RECOMP_GUN_SWAY_STRENGTH");
+    s_gs_str = e && e[0] ? atoi(e) : 3;
+    s_gs_str = s_gs_str < 1 ? 1 : s_gs_str > 5 ? 5 : s_gs_str;
+    e = getenv("RECOMP_GUN_SWAY_LOG");
+    s_gs_log = e && e[0] == '1';
+}
+int  game_gunsway_get(void)         { gs_cfg(); return s_gs_on; }
+void game_gunsway_set(int on)       { gs_cfg(); s_gs_on = on ? 1 : 0; }
+int  game_gunswaystr_get(void)      { gs_cfg(); return s_gs_str; }
+void game_gunswaystr_set(int v)     { gs_cfg(); s_gs_str = v < 1 ? 1 : v > 5 ? 5 : v; }
+
+/* RUN POSE: while the player sprints the weapon is carried across the body (muzzle turned aside and lowered, a little roll,
+ * like Vanguard) and swings with the steps. game_runpose_tick() is called every frame from sprint_apply with "is sprinting";
+ * the pose is blended in/out and added to the weapon pass of gun_sway_view as extra camera rotation (rx about the right axis,
+ * ry about the up axis, rz about the forward axis; the weapon is turned by v' = v * E, so ry > 0 swings the muzzle left,
+ * rx < 0 lowers it). Only rotations are used, so no world-unit guesses: the arc moves the gun because it sits off the camera.
+ * RECOMP_RUN_POSE=0 off; RECOMP_RUN_POSE_TUNE="ry,rx,rz,bobx,boby,bobr" (radians) overrides the pose and swing amplitudes. */
+static float s_rp_blend, s_rp_phase;
+static float s_rp_pose[3] = { 0.60f, -0.12f, -0.38f };   /* ry, rx, rz at full blend */
+static float s_rp_bob[3]  = { 0.030f, 0.020f, 0.050f };  /* lateral yaw swing, vertical pitch bounce, roll rock */
+static int s_rp_on = -1;
+
+void game_runpose_tick(int running, float dt)
+{
+    extern volatile int g_mkb_fire_held, g_mkb_aim_held;
+    static float s_rp_hold;                     /* seconds the pose stays off after the last fire / aim, so it does not flicker */
+    float target, tc;
+    if (g_mkb_fire_held || g_mkb_aim_held || scope_up())
+        s_rp_hold = 0.25f;                      /* firing or aiming: the gun must be at the muzzle the bullets leave from */
+    else if (s_rp_hold > 0.0f)
+        s_rp_hold -= dt;
+    if (s_rp_hold > 0.0f)
+        running = 0;
+    target = running ? 1.0f : 0.0f;
+    tc = running ? 0.12f : (s_rp_hold > 0.0f ? 0.05f : 0.18f);    /* fast back to normal on fire / aim */
+    if (s_rp_on < 0) {
+        const char *e = getenv("RECOMP_RUN_POSE"), *t = getenv("RECOMP_RUN_POSE_TUNE");
+        float v[6];
+        s_rp_on = !(e && e[0] == '0');
+        if (t && sscanf(t, "%f,%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6) {
+            memcpy(s_rp_pose, v, sizeof s_rp_pose);
+            memcpy(s_rp_bob, v + 3, sizeof s_rp_bob);
+        }
+    }
+    if (dt <= 0.0f || dt > 0.25f)
+        dt = 0.0f;
+    s_rp_blend += (target - s_rp_blend) * (1.0f - expf(-dt / tc));
+    if (s_rp_blend < 0.001f)
+        s_rp_blend = 0.0f;
+    if (s_rp_blend > 0.02f) {
+        s_rp_phase += dt * 6.2831853f * 1.5f;               /* 1.5 full lateral swings a second = 3 steps */
+        if (s_rp_phase > 6.2831853f)
+            s_rp_phase -= 6.2831853f;
+    }
+}
+
+/* THIRD PERSON (research step 1): the eye is moved straight back along the camera's forward axis by s_tp_dist metres (the world is in
+ * metres: player feet z 0.12, eye 1.6). The camera transform at params + 0xD0 is rebuilt by the game each frame, but if the first call of a
+ * frame still finds exactly what was written last time it is not taken as the true camera. The original is kept and every call of the frame
+ * gets it plus the offset (translation row z, index 14: view z = world . forward + t, so +d = farther from the eye = camera behind). The
+ * weapon pass (0xF463F) gets the original pushed 1000 behind the camera so the first-person hands and gun are clipped away. The player has no
+ * body object in single player (BODY-PROBE), so for now you see an empty spot where you stand. Gameplay cameras only (fov above 0.3 rad), first
+ * view only (split-screen: player 1). Off by default: RECOMP_THIRD=1 (RECOMP_THIRD_DIST=m); with RECOMP_DEV_KEYS=1 Numpad * toggles,
+ * Numpad + / - changes the distance by 0.5. */
+static int s_tp_on = -1;
+static float s_tp_dist = 3.0f;
+static float s_tp_orig[16], s_tp_wr[16];
+static int s_tp_have;
+
+static void tp_cfg(void)
+{
+    const char *e;
+    if (s_tp_on >= 0)
+        return;
+    e = getenv("RECOMP_THIRD");
+    s_tp_on = e && e[0] == '1';
+    e = getenv("RECOMP_THIRD_DIST");
+    if (e && e[0] && atof(e) > 0.0)
+        s_tp_dist = (float)atof(e);
+}
+
+/* GHOST BODY (nv2a_pb_exec.c ghost_draw): the game side only says where the player stands and which way the camera looks.
+ * RECOMP_GHOST=0 off. Dev key Numpad / turns the body by 90 degrees (the model's forward axis is not known: press until it
+ * faces the way you look; RECOMP_GHOST_K=0..3 starts there). */
+typedef struct { int on; uint32_t frame; float pos[3]; float yaw; int yawk; float speed; float eyeh; int cycle; float eye[3]; int fp; float back; } NvGhost;
+extern NvGhost g_nv_ghost;
+extern uint32_t game_pc_get(void);
+static int s_gh_on = -1;
+
+static void tp_keys(void)
+{
+    static int dn[5];
+    static const int vk[5] = { VK_MULTIPLY, VK_ADD, VK_SUBTRACT, VK_DIVIDE, VK_DECIMAL };
+    int i;
+    if (s_gh_on < 0) {
+        const char *e = getenv("RECOMP_GHOST"), *k = getenv("RECOMP_GHOST_K");
+        s_gh_on = e && e[0] == '1';             /* off unless asked: the ghost is still broken (research build) */
+        g_nv_ghost.yawk = k && k[0] ? atoi(k) & 3 : -1;     /* -1: found from the model itself (nv2a_pb_exec.c gh_analyse) */
+    }
+    if (!game_dev_keys())
+        return;
+    for (i = 0; i < 5; i++) {
+        int k = (GetAsyncKeyState(vk[i]) & 0x8000) != 0;
+        if (k && !dn[i]) {
+            if (i == 0)
+                s_tp_on = !s_tp_on;
+            else if (i == 3)
+                g_nv_ghost.yawk = (g_nv_ghost.yawk + 1) & 3;
+            else if (i == 4)
+                g_nv_ghost.cycle++;                    /* the next soldier type */
+            else
+                s_tp_dist += i == 1 ? 0.5f : -0.5f;
+            if (s_tp_dist < 0.5f)
+                s_tp_dist = 0.5f;
+            fprintf(stderr, "[THIRD] %s, distance %.1f m, body turn %d x 90 deg\n", s_tp_on ? "ON" : "off", (double)s_tp_dist, g_nv_ghost.yawk);
+        }
+        dn[i] = k;
+    }
+}
+
+/* The player's feet (player object + 0x90), his ground speed over the last quarter second (a ring of position samples), and the
+ * frame counter the renderer keys on. */
+static void gh_track(uint32_t pc)
+{
+    static double st_t[64];
+    static float st_x[64], st_y[64];
+    static int st_n, st_i;
+    double now = fov_now_ms();
+    int k, found = -1;
+    g_nv_ghost.pos[0] = guest_f(pc + 0x90u);
+    g_nv_ghost.pos[1] = guest_f(pc + 0x94u);
+    g_nv_ghost.pos[2] = guest_f(pc + 0x98u);
+    st_t[st_i] = now; st_x[st_i] = g_nv_ghost.pos[0]; st_y[st_i] = g_nv_ghost.pos[1];
+    st_i = (st_i + 1) & 63;
+    if (st_n < 64) st_n++;
+    for (k = 2; k <= st_n; k++) {               /* newest first: the first sample at least 250 ms old */
+        int j = (st_i - k) & 63;
+        if (now - st_t[j] >= 250.0) { found = j; break; }
+    }
+    if (found >= 0) {
+        float dx = g_nv_ghost.pos[0] - st_x[found], dy = g_nv_ghost.pos[1] - st_y[found], v;
+        v = sqrtf(dx * dx + dy * dy) / (float)((now - st_t[found]) * 0.001);
+        g_nv_ghost.speed = v > 12.0f ? 12.0f : v;
+    }
+    g_nv_ghost.frame++;
+}
+
+/* FIRST-PERSON BODY (RECOMP_FP_BODY=1; RECOMP_FP_BACK=m, default 0.2): the player has no body in single player, so while the third-person
+ * camera is off the renderer draws the cached soldier body (nv2a_pb_exec.c) at his feet, a little behind the eye, without head and arms,
+ * so looking down shows a chest and legs. The camera is not touched. The heading comes from the camera's RIGHT axis (column 0: it stays
+ * horizontal when he looks at the floor, where the flattened forward axis shrinks to nothing and flips); the offset between the two is
+ * measured while he looks ahead. Gameplay camera only, first view only. */
+static int s_fpb_on = -1;
+static float s_fpb_back = 0.2f;
+
+static void fpb_cfg(void)
+{
+    const char *e;
+    if (s_fpb_on >= 0)
+        return;
+    e = getenv("RECOMP_FP_BODY");
+    s_fpb_on = e && e[0] == '1';
+    e = getenv("RECOMP_FP_BACK");
+    if (e && e[0])
+        s_fpb_back = (float)atof(e);
+}
+
+static void fp_body(uint32_t p)
+{
+    static float delta;
+    static int have_delta;
+    float m[16], hf, hr, eye[3];
+    uint32_t pc = game_pc_get();
+    int i;
+    g_nv_ghost.on = 0;
+    g_nv_ghost.fp = 0;
+    if (guest_f(p + 0xC0) < 0.3f || pc < 0x80000000u)   /* not a gameplay camera */
+        return;
+    for (i = 0; i < 16; i++)
+        m[i] = guest_f(p + 0xD0u + 4u * (uint32_t)i);
+    hf = sqrtf(m[2] * m[2] + m[6] * m[6]);
+    hr = atan2f(m[4], m[0]);
+    if (hf > 0.8f) {                            /* looking ahead: the forward heading, and how it relates to the right axis */
+        float d = atan2f(m[6], m[2]) - hr;
+        while (d > 3.14159265f) d -= 6.2831853f;
+        while (d < -3.14159265f) d += 6.2831853f;
+        delta = d;
+        have_delta = 1;
+    }
+    g_nv_ghost.on = 1;
+    g_nv_ghost.fp = 1;
+    g_nv_ghost.back = s_fpb_back;
+    gh_track(pc);
+    if (have_delta) {
+        g_nv_ghost.yaw = hr + delta;
+    } else if (hf > 0.05f) {
+        g_nv_ghost.yaw = atan2f(m[6], m[2]);
+    }
+    for (i = 0; i < 3; i++)                     /* eye = -(translation row) against the rows of the rotation (as in third_view) */
+        eye[i] = -(m[i * 4 + 0] * m[12] + m[i * 4 + 1] * m[13] + m[i * 4 + 2] * m[14]);
+    memcpy(g_nv_ghost.eye, eye, sizeof eye);
+    g_nv_ghost.eyeh = eye[2] - g_nv_ghost.pos[2];
+}
+
+static int third_view(uint32_t p, uint32_t ret)
+{
+    float cur[16], w[16];
+    int i;
+    if (guest_f(p + 0xC0) < 0.3f) {             /* not a gameplay camera */
+        g_nv_ghost.on = 0;
+        return 0;
+    }
+    for (i = 0; i < 16; i++)
+        cur[i] = guest_f(p + 0xD0u + 4u * (uint32_t)i);
+    if (ret == 0x80D67u) {
+        uint32_t pc = game_pc_get();
+        if (!(s_tp_have && memcmp(cur, s_tp_wr, sizeof cur) == 0))
+            memcpy(s_tp_orig, cur, sizeof cur);
+        s_tp_have = 1;
+        g_nv_ghost.on = s_gh_on > 0 && pc >= 0x80000000u;
+        g_nv_ghost.fp = 0;
+        if (g_nv_ghost.on) {                    /* feet at player + 0x90; heading = the camera's forward axis (column 2) flattened */
+            gh_track(pc);
+            g_nv_ghost.yaw = atan2f(s_tp_orig[6], s_tp_orig[2]);
+            g_nv_ghost.eyeh = -(s_tp_orig[8] * s_tp_orig[12] + s_tp_orig[9] * s_tp_orig[13] + s_tp_orig[10] * s_tp_orig[14]) - g_nv_ghost.pos[2];
+        }
+    } else if (!s_tp_have)
+        return 0;
+    memcpy(w, s_tp_orig, sizeof w);
+    w[14] += ret == 0xF463Fu ? -1000.0f : s_tp_dist;
+    for (i = 12; i < 16; i++)
+        guest_set_f(p + 0xD0u + 4u * (uint32_t)i, w[i]);
+    if (ret == 0x80D67u && g_nv_ghost.on) {     /* the camera's eye after the pull-back: eye = -M * t (rows of M against the translation row) */
+        g_nv_ghost.eye[0] = -(cur[0] * w[12] + cur[1] * w[13] + cur[2] * w[14]);
+        g_nv_ghost.eye[1] = -(cur[4] * w[12] + cur[5] * w[13] + cur[6] * w[14]);
+        g_nv_ghost.eye[2] = -(cur[8] * w[12] + cur[9] * w[13] + cur[10] * w[14]);
+    }
+    memcpy(s_tp_wr, cur, sizeof cur);           /* what the matrix holds now: the rotation as it was, the translation row replaced */
+    for (i = 12; i < 16; i++)
+        s_tp_wr[i] = w[i];
+    return 1;
+}
+
+/* FREECAM: a camera that flies free of the player. Key (default Insert; RECOMP_FREECAM_KEY = a virtual-key number) or the F1 row
+ * "Freecam" toggles it. The camera transform at params + 0xD0 (see gun_sway_view) is written in full on every view-update call: the
+ * eye, yaw and pitch are kept here. The weapon pass gets the camera 1000 behind so the first-person gun is not drawn. Mouse (taken from
+ * the look hook, game_patches.c aim_inject_yaw, and here once a frame) and the right stick turn; WASD / the left stick fly along the view;
+ * Space or the right trigger up, C or the left trigger down, Shift or the left-stick click fast, Ctrl slow. The input filter
+ * (g_xbox_input_filter) empties the pad the game sees while it is on, except Start and Back, so the soldier stands still and the
+ * pause menu still works. World frozen (default): the frame time handed to the game is scaled down to almost nothing
+ * (game_patch_000137C0), so enemies, physics and scripts stand still; world running: only the camera moves.
+ * ini freecam_world (0 frozen, 1 running), freecam_speed (1..5). RECOMP_FREECAM_LOG=1 logs the toggles. */
+typedef struct { DWORD pkt; WORD btn; BYTE an[8]; SHORT lx, ly, rx, ry; } FcPad;   /* XBOX_INPUT_STATE (xinput_xbox.h) */
+extern void (*g_xbox_input_filter)(void *pState);
+extern volatile long g_input_block;
+int mkb_native_aim_take(float *yaw, float *pitch);
+
+static int s_fc_on;                             /* flying now */
+static int s_fc_want;                           /* asked for (key or menu) */
+static int s_fc_cfgd, s_fc_world, s_fc_speed = 3, s_fc_log;
+static int s_fc_key = VK_INSERT;
+static int s_fc_pos_ok;                         /* params + 0x60 is the eye position: write it too */
+static int s_fc_hand = 1;                      /* +1 right-handed (right x up = forward), -1 mirrored */
+static uint32_t s_fc_main;                      /* the view that may fly (first player's) */
+static double s_fc_main_ms;                     /* last time it was seen */
+static uint32_t s_fc_view0, s_fc_seen;         /* the view flown from, and the last game frame it was seen */
+static float s_fc_eye[3], s_fc_yaw, s_fc_pitch, s_fc_mdy, s_fc_mdp;
+static volatile int s_fc_lx, s_fc_ly, s_fc_rx, s_fc_ry, s_fc_up, s_fc_dn, s_fc_fast;
+static double s_fc_t;
+
+static void fc_filter(void *ps)
+{
+    FcPad *s = (FcPad *)ps;
+    if (!s_fc_on || GUEST8(0x378964) == 1)      /* not flying, or a menu is up (the pause menu keeps its pad) */
+        return;
+    s_fc_lx = s->lx;
+    s_fc_ly = s->ly;
+    s_fc_rx = s->rx;
+    s_fc_ry = s->ry;
+    s_fc_up = s->an[7] > 100;
+    s_fc_dn = s->an[6] > 100;
+    s_fc_fast = (s->btn & 0x0040) != 0;
+    s->btn &= 0x0030;                           /* Start and Back stay */
+    memset(s->an, 0, sizeof s->an);
+    s->lx = s->ly = s->rx = s->ry = 0;
+}
+
+static void fc_cfg(void)
+{
+    const char *e;
+    if (s_fc_cfgd)
+        return;
+    s_fc_cfgd = 1;
+    e = getenv("RECOMP_FREECAM_WORLD");
+    s_fc_world = e && e[0] == '1';
+    e = getenv("RECOMP_FREECAM_SPEED");
+    if (e && e[0])
+        s_fc_speed = atoi(e) < 1 ? 1 : atoi(e) > 5 ? 5 : atoi(e);
+    e = getenv("RECOMP_FREECAM_KEY");
+    if (e && e[0] && atoi(e) > 0 && atoi(e) < 256)
+        s_fc_key = atoi(e);
+    e = getenv("RECOMP_FREECAM_LOG");
+    s_fc_log = e && e[0] == '1';
+    g_xbox_input_filter = fc_filter;
+}
+
+int  game_freecam_get(void)         { fc_cfg(); return s_fc_want; }
+void game_freecam_set(int on)       { fc_cfg(); s_fc_want = on ? 1 : 0; }
+int  game_freecamworld_get(void)    { fc_cfg(); return s_fc_world; }
+void game_freecamworld_set(int v)   { fc_cfg(); s_fc_world = v ? 1 : 0; }
+int  game_freecamspeed_get(void)    { fc_cfg(); return s_fc_speed; }
+void game_freecamspeed_set(int v)   { fc_cfg(); s_fc_speed = v < 1 ? 1 : v > 5 ? 5 : v; }
+int  game_freecam_active(void)      { return s_fc_on; }
+int  game_freecam_frozen(void)      { return s_fc_on && !s_fc_world; }
+void game_freecam_mouse(float dyaw, float dpitch) { s_fc_mdy += dyaw; s_fc_mdp += dpitch; }
+
+/* A level starts loading (open of loading.viv / level_a.str, from rs_open_hook): end the flight, or the frozen world and the
+ * blocked pad carry over into the next level. The view object can be the same one, so no view test can see this. */
+void game_freecam_levelload(void)
+{
+    nv2a_gpu_weapon_clean();                    /* a new level: a clean weapon */
+    s_fc_main = 0;                              /* the next level has its own view object */
+    if (s_fc_on || s_fc_want) {
+        s_fc_on = 0;
+        s_fc_want = 0;
+        if (s_fc_log)
+            fprintf(stderr, "[FREECAM] off (level load)\n");
+    }
+}
+
+static int fc_fg(void)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+    return pid == GetCurrentProcessId();
+}
+
+static float fc_dz(int v)                       /* a stick value, -1..1 with a dead zone */
+{
+    float f = (float)v / 32767.0f;
+    if (f > -0.15f && f < 0.15f)
+        return 0.0f;
+    return f > 1.0f ? 1.0f : f < -1.0f ? -1.0f : f;
+}
+
+static int fc_view(uint32_t view, uint32_t p, uint32_t ret)
+{
+    static int keydn;
+    float m[16], f[3], r[3], u[3], cp;
+    int i;
+    fc_cfg();
+    if (s_fc_on) {  /* a level change (quit from the pause menu, next mission) must end the flight: the old view object is gone, so
+                     * this function would never see it again and the world would stay frozen with the pad blocked */
+        if (view == s_fc_view0) {
+            s_fc_seen = g_game_frames;
+        } else if (g_game_frames < s_fc_seen || g_game_frames - s_fc_seen > 30u) {
+            s_fc_on = 0;
+            s_fc_want = 0;
+            if (s_fc_log)
+                fprintf(stderr, "[FREECAM] off (level changed, old view %08X now %08X)\n", s_fc_view0, view);
+        }
+    }
+    if (view != s_fc_main)                      /* only the main (first player's) view flies, see fc_track_main */
+        return 0;
+    if (ret == 0x80D67u) {
+        int k = fc_fg() && (GetAsyncKeyState(s_fc_key) & 0x8000) != 0;
+        {   /* IN-GAME EDITOR (game_patches.c): one call a frame; returns at once unless RECOMP_EDITOR_LOG=1 */
+            extern void game_editor_tick(const float *eye, const float *fwd, int fc_on);
+            extern void game_editor_view(const float *right, const float *up, float px, float py);
+            float fwd[3], cpe = cosf(s_fc_pitch), er[3], eu[3];
+            fwd[0] = cpe * cosf(s_fc_yaw);
+            fwd[1] = cpe * sinf(s_fc_yaw);
+            fwd[2] = sinf(s_fc_pitch);
+            er[0] = -(float)s_fc_hand * sinf(s_fc_yaw);             /* the camera basis as written to the view below */
+            er[1] = (float)s_fc_hand * cosf(s_fc_yaw);
+            er[2] = 0.0f;
+            eu[0] = (float)s_fc_hand * (fwd[1] * er[2] - fwd[2] * er[1]);
+            eu[1] = (float)s_fc_hand * (fwd[2] * er[0] - fwd[0] * er[2]);
+            eu[2] = (float)s_fc_hand * (fwd[0] * er[1] - fwd[1] * er[0]);
+            if (s_fc_on) {                      /* the mouse ray of the editor window: 1 / tan of the half angles */
+                float tH = guest_f(p + 0xB8u), tV = guest_f(p + 0xBCu), m0 = guest_f(p + 0x110u), m5 = guest_f(p + 0x110u + 20u), px, py;
+                static unsigned nlog;
+                if (tH > 0.1f && tH < 10.0f && tV > 0.1f && tV < 10.0f) {
+                    px = 1.0f / tH;
+                    py = 1.0f / tV;
+                } else if (m0 > 0.0f && m5 > 0.0f) {    /* the matrix at +0x110 held a scaled copy in the log: only its x : y ratio is believed (vertical view 70 degrees) */
+                    py = 1.0f / tanf(35.0f * 3.14159265f / 180.0f);
+                    px = py * (m0 / m5);
+                } else {
+                    px = m0;
+                    py = m5;
+                }
+                if (s_fc_log && nlog < 6 && (++nlog)) {
+                    fprintf(stderr, "[FREECAM] editor view: tan half angles %.4f %.4f, matrix %.3f %.3f -> proj %.3f %.3f\n", (double)tH, (double)tV, (double)m0, (double)m5, (double)px, (double)py);
+                }
+                game_editor_view(er, eu, px, py);
+            }
+            game_editor_tick(s_fc_eye, fwd, s_fc_on);
+        }
+        int play = guest_f(p + 0xC0) >= 0.3f && game_pc_get() >= 0x80000000u;
+        if (k && !keydn)
+            s_fc_want = !s_fc_want;
+        keydn = k;
+        if (s_fc_on && !play)
+            s_fc_want = 0;                      /* a cut scene or a level change ends it */
+        if (s_fc_want && !s_fc_on && play && GUEST8(0x378964) != 1) {
+            float fw[3];
+            for (i = 0; i < 16; i++)
+                m[i] = guest_f(p + 0xD0u + 4u * (uint32_t)i);
+            for (i = 0; i < 3; i++) {
+                s_fc_eye[i] = -(m[i * 4 + 0] * m[12] + m[i * 4 + 1] * m[13] + m[i * 4 + 2] * m[14]);
+                fw[i] = m[i * 4 + 2];
+            }
+            {   /* handedness: (right x up) . forward */
+                float cx = m[4] * m[9] - m[8] * m[5], cy = m[8] * m[1] - m[0] * m[9], cz = m[0] * m[5] - m[4] * m[1];
+                s_fc_hand = cx * fw[0] + cy * fw[1] + cz * fw[2] >= 0.0f ? 1 : -1;
+            }
+            {   /* the game's own culling and LOD read the eye position at params + 0x60 (sub_00130010: distance from it, not from the
+                 * matrix): if it holds the eye now, it is moved with the camera, or things far from the soldier vanish */
+                float dx = guest_f(p + 0x60) - s_fc_eye[0], dy = guest_f(p + 0x64) - s_fc_eye[1], dz = guest_f(p + 0x68) - s_fc_eye[2];
+                s_fc_pos_ok = dx * dx + dy * dy + dz * dz < 0.25f;
+                if (s_fc_log)
+                    fprintf(stderr, "[FREECAM] params+0x60 %.2f %.2f %.2f vs eye %.2f %.2f %.2f -> %s\n", (double)guest_f(p + 0x60),
+                            (double)guest_f(p + 0x64), (double)guest_f(p + 0x68), (double)s_fc_eye[0], (double)s_fc_eye[1],
+                            (double)s_fc_eye[2], s_fc_pos_ok ? "moved with the camera" : "left alone");
+            }
+            s_fc_yaw = atan2f(fw[1], fw[0]);
+            s_fc_pitch = asinf(fw[2] > 1.0f ? 1.0f : fw[2] < -1.0f ? -1.0f : fw[2]);
+            s_fc_mdy = s_fc_mdp = 0.0f;
+            s_fc_t = fov_now_ms();
+            s_fc_view0 = view;
+            s_fc_seen = g_game_frames;
+            s_fc_on = 1;
+            if (s_fc_log)
+                fprintf(stderr, "[FREECAM] ON eye %.2f %.2f %.2f yaw %.3f pitch %.3f hand %d world %s\n", (double)s_fc_eye[0],
+                        (double)s_fc_eye[1], (double)s_fc_eye[2], (double)s_fc_yaw, (double)s_fc_pitch, s_fc_hand,
+                        s_fc_world ? "running" : "frozen");
+        } else if (!s_fc_want && s_fc_on) {
+            s_fc_on = 0;
+            if (s_fc_log)
+                fprintf(stderr, "[FREECAM] off\n");
+        } else if (s_fc_want && !s_fc_on && !play) {
+            s_fc_want = 0;
+        }
+        if (!s_fc_on)
+            return 0;
+        {   /* once a frame: turn and fly */
+            double now = fov_now_ms(), dt = (now - s_fc_t) * 0.001;
+            float my = 0.0f, mp = 0.0f, tx, ty, sp, mvf, mvr, mvu;
+            static const float k_speed[5] = { 2.0f, 4.0f, 7.0f, 12.0f, 20.0f };
+            s_fc_t = now;
+            if (dt < 0.0f || dt > 0.1)
+                dt = 0.1;
+            if (!g_input_block && GUEST8(0x378964) != 1) {
+                if (mkb_native_aim_take(&my, &mp)) {    /* always called: it keeps the mouse deltas off the stick */
+                    extern int game_editor_look_ok(void);
+                    if (game_editor_look_ok()) {        /* the editor window frees the pointer: the mouse turns the camera only while the right button is held */
+                        s_fc_mdy += my;
+                        s_fc_mdp += mp;
+                    }
+                }
+                tx = s_fc_mdy + fc_dz(s_fc_rx) * 2.4f * (float)dt;
+                ty = s_fc_mdp + fc_dz(s_fc_ry) * 1.8f * (float)dt;
+                s_fc_mdy = s_fc_mdp = 0.0f;
+                s_fc_yaw += (float)s_fc_hand * tx;
+                s_fc_pitch += ty;
+                if (s_fc_pitch > 1.5f) s_fc_pitch = 1.5f;
+                if (s_fc_pitch < -1.5f) s_fc_pitch = -1.5f;
+                sp = k_speed[s_fc_speed - 1];
+                if (fc_fg()) {
+                    if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) || s_fc_fast) sp *= 4.0f;
+                    if (GetAsyncKeyState(VK_CONTROL) & 0x8000) sp *= 0.25f;
+                    mvu = ((GetAsyncKeyState(VK_SPACE) & 0x8000) ? 1.0f : 0.0f) - ((GetAsyncKeyState('C') & 0x8000) ? 1.0f : 0.0f);
+                } else {
+                    mvu = 0.0f;
+                }
+                {
+                    extern int game_editor_window_up(void);
+                    if (!game_editor_window_up())       /* the editor window uses the mouse buttons: they (the pad triggers they press) do not fly up / down then */
+                        mvu += (s_fc_up ? 1.0f : 0.0f) - (s_fc_dn ? 1.0f : 0.0f);
+                }
+                mvf = fc_dz(s_fc_ly);
+                mvr = fc_dz(s_fc_lx);
+                {
+                    float cpp = cosf(s_fc_pitch), fx = cpp * cosf(s_fc_yaw), fy = cpp * sinf(s_fc_yaw), fz = sinf(s_fc_pitch);
+                    float rx = -(float)s_fc_hand * sinf(s_fc_yaw), ry = (float)s_fc_hand * cosf(s_fc_yaw);
+                    float step = sp * (float)dt;
+                    s_fc_eye[0] += (fx * mvf + rx * mvr) * step;
+                    s_fc_eye[1] += (fy * mvf + ry * mvr) * step;
+                    s_fc_eye[2] += (fz * mvf + mvu) * step;
+                }
+            }
+        }
+    }
+    if (!s_fc_on)
+        return 0;
+    cp = cosf(s_fc_pitch);
+    f[0] = cp * cosf(s_fc_yaw);
+    f[1] = cp * sinf(s_fc_yaw);
+    f[2] = sinf(s_fc_pitch);
+    r[0] = -(float)s_fc_hand * sinf(s_fc_yaw);      /* right = hand * (Z x forward), normalised */
+    r[1] = (float)s_fc_hand * cosf(s_fc_yaw);
+    r[2] = 0.0f;
+    u[0] = (float)s_fc_hand * (f[1] * r[2] - f[2] * r[1]);          /* up = hand * (forward x right) */
+    u[1] = (float)s_fc_hand * (f[2] * r[0] - f[0] * r[2]);
+    u[2] = (float)s_fc_hand * (f[0] * r[1] - f[1] * r[0]);
+    for (i = 0; i < 3; i++) {
+        guest_set_f(p + 0xD0u + 16u * (uint32_t)i + 0u, r[i]);
+        guest_set_f(p + 0xD0u + 16u * (uint32_t)i + 4u, u[i]);
+        guest_set_f(p + 0xD0u + 16u * (uint32_t)i + 8u, f[i]);
+    }
+    if (s_fc_pos_ok) {
+        guest_set_f(p + 0x60u, s_fc_eye[0]);
+        guest_set_f(p + 0x64u, s_fc_eye[1]);
+        guest_set_f(p + 0x68u, s_fc_eye[2]);
+    }
+    guest_set_f(p + 0x100u, -(s_fc_eye[0] * r[0] + s_fc_eye[1] * r[1] + s_fc_eye[2] * r[2]));
+    guest_set_f(p + 0x104u, -(s_fc_eye[0] * u[0] + s_fc_eye[1] * u[1] + s_fc_eye[2] * u[2]));
+    guest_set_f(p + 0x108u, -(s_fc_eye[0] * f[0] + s_fc_eye[1] * f[1] + s_fc_eye[2] * f[2]) - (ret == 0xF463Fu ? 1000.0f : 0.0f));
+    {   /* cached view*projection (p+0x150 = p+0xD0 x p+0x110, same math as sub_00014560): the
+           game only rebuilds it when byte p+0x193 is 0, so refresh it ourselves, else the cull
+           and sort code keep using the soldier's own camera */
+        float A[16], B[16];
+        int a, b, k;
+        for (i = 0; i < 16; i++) {
+            A[i] = guest_f(p + 0xD0u + 4u * (uint32_t)i);
+            B[i] = guest_f(p + 0x110u + 4u * (uint32_t)i);
+        }
+        for (a = 0; a < 4; a++)
+            for (b = 0; b < 4; b++) {
+                float s = 0.0f;
+                for (k = 0; k < 4; k++)
+                    s += A[a * 4 + k] * B[k * 4 + b];
+                guest_set_f(p + 0x150u + 4u * (uint32_t)(a * 4 + b), s);
+            }
+    }
+    return 1;
+}
+
+/* Called by hand from sub_0018CE80 (gen/recomp_0045.c, loc_0018CE96), the game's camera setter: it copies the camera block at
+ * params + 0x30..0x6F (rows right / forward / up / position), applies the shake, hands the copy to the renderer (vtable + 0xEC,
+ * frustum planes) and rebuilds the view matrix at +0xD0 from it (sub_0018B540: +0xD0 row k = (row0[k], row2[k], row1[k]),
+ * translation = -(pos . row0, pos . row2, pos . row1)). Writing the free camera into the block itself makes all of those agree. */
+void game_fc_setter(uint32_t p)
+{
+    static unsigned n;
+    float cp, f[3], r[3], u[3];
+    int i;
+    if (!s_fc_on || !p)
+        return;
+    n++;
+    if (s_fc_log && (n % 120u) == 1u)
+        fprintf(stderr, "[FREECAM] camera setter hit %u (eye %.1f %.1f %.1f)\n", n, (double)s_fc_eye[0], (double)s_fc_eye[1], (double)s_fc_eye[2]);
+    cp = cosf(s_fc_pitch);
+    f[0] = cp * cosf(s_fc_yaw);
+    f[1] = cp * sinf(s_fc_yaw);
+    f[2] = sinf(s_fc_pitch);
+    r[0] = -(float)s_fc_hand * sinf(s_fc_yaw);
+    r[1] = (float)s_fc_hand * cosf(s_fc_yaw);
+    r[2] = 0.0f;
+    u[0] = (float)s_fc_hand * (f[1] * r[2] - f[2] * r[1]);
+    u[1] = (float)s_fc_hand * (f[2] * r[0] - f[0] * r[2]);
+    u[2] = (float)s_fc_hand * (f[0] * r[1] - f[1] * r[0]);
+    for (i = 0; i < 3; i++) {
+        guest_set_f(p + 0x30u + 4u * (uint32_t)i, r[i]);
+        guest_set_f(p + 0x40u + 4u * (uint32_t)i, f[i]);
+        guest_set_f(p + 0x50u + 4u * (uint32_t)i, u[i]);
+        guest_set_f(p + 0x60u + 4u * (uint32_t)i, s_fc_eye[i]);
+    }
+}
+
+/* The main (first player's) view: the first one seen, and a new one once the old one has been silent for 1.5 s (a level loaded:
+ * every level has its own view object). game_freecam_levelload clears it too. Returns 1 for the main view. */
+static int fc_track_main(uint32_t view)
+{
+    double nowms = fov_now_ms();
+    if (!s_fc_main || (view != s_fc_main && nowms - s_fc_main_ms > 1500.0))
+        s_fc_main = view;
+    if (view != s_fc_main)
+        return 0;
+    s_fc_main_ms = nowms;
+    return 1;
+}
+
+static double s_gs_seen_ms[2];                  /* when each gun-sway slot's view was last seen */
+
+/* WEAPON LIGHTING level (0 Off, 1 Low, 2 Normal, 3 High; nv2a_gpu.c does the work): ini weapon_light, env RECOMP_WEAPON_LIGHT. Read once;
+ * the setting row changes it live. */
+extern int nv2a_gpu_weapon_level(void);
+extern void nv2a_gpu_weapon_config(int level);
+static int s_wl_init;
+static void wl_cfg(void)
+{
+    const char *e;
+    if (s_wl_init)
+        return;
+    s_wl_init = 1;
+    e = getenv("RECOMP_WEAPON_LIGHT");
+    nv2a_gpu_weapon_config(e && e[0] ? atoi(e) : 2);
+}
+int  game_weaponlight_get(void)     { wl_cfg(); return nv2a_gpu_weapon_level(); }
+void game_weaponlight_set(int v)    { wl_cfg(); nv2a_gpu_weapon_config(v); }
+
+/* WEAPON LIGHTING: a begin / end marker in the GPU command stream around the weapon pass, so the executor (which runs the commands
+ * a little later, on its own thread) knows which draws are the first-person weapon's. The marker is what D3D pushes for its own
+ * software methods (sub_002DE0C0 writes 0x40100, 5: NO_OPERATION with one parameter) with a magic value instead. It is written the
+ * way D3D writes a push (sub_002DA350): at the device's put pointer [dev], only while it is below the threshold [dev+4], then [dev]
+ * moves on. No room: skipped (the draws of that frame are lit as ordinary ones) and counted. The end marker is always written when a
+ * begin was. RECOMP_WPN_LOG=1 prints the counts once a second. */
+static int s_wm_open;
+static unsigned s_wm_sent, s_wm_skipped, s_wm_made;       /* made = times room was made first (sub_002DE370) */
+extern void sub_002DE370(void);
+extern __declspec(thread) uint32_t g_edx, g_ebx, g_esi, g_edi, g_ebp;
+static unsigned s_wm_skip_be[2];                   /* skipped begins / ends */
+static int s_wm_last_gap, s_wm_last_end;           /* [dev+4] - put and [dev+0x28] - put at the last skip */
+static void wpn_mark(int on)
+{
+    uint32_t dev, put, thr;
+    static double last;
+    static int log_on = -1;
+    s_wp_in_pass = on;
+    if (on && nv2a_gpu_weapon_level() > 0) {   /* always on, once per 10 s: begin calls reached vs markers written */
+        static unsigned calls;
+        static double last10;
+        double t10 = fov_now_ms();
+        calls++;
+        if (t10 - last10 > 10000.0) {
+            last10 = t10;
+            fprintf(stderr, "[WPNMARK] 10 s: begin calls %u sent %u skipped %u made-room %u\n", calls, s_wm_sent, s_wm_skipped, s_wm_made);
+        }
+    }
+    if (log_on < 0) {
+        const char *e = getenv("RECOMP_WPN_LOG");
+        log_on = e && e[0] == '1';
+    }
+    if (on ? nv2a_gpu_weapon_level() <= 0 : !s_wm_open)
+        return;
+    if (on) {                                   /* the blood colour follows the setting; aiming down the sights moves the gun to the middle (the light's shading follows) */
+        float c[3], f = (1.0f - game_view_fov_deg() / 70.0f) / 0.3f;
+        nv2a_gpu_weapon_aim(f < 0.0f ? 0.0f : f > 1.0f ? 1.0f : f);
+        game_blood_main_rgb(c);
+        nv2a_gpu_weapon_blood_color(c[0], c[1], c[2]);
+    }
+    dev = GUEST32(GAME_D3D_DEVICE_PTR);
+    if (!dev || (dev & 3u))
+        goto done;
+    put = GUEST32(dev);
+    thr = GUEST32(dev + 4u);
+    if (!(thr > put)) {
+        /* D3D's own rule (sub_002DA350): write while put < threshold (16 bytes there, 8 here), and only when put has reached it call
+         * sub_002DE370, which returns the new put pointer in eax. A skipped begin leaves this frame's weapon unlit (a flash), a lost end
+         * leaves the pass open. The game's registers and stack pointer are kept, as this runs in front of sub_0018E150. */
+        uint32_t sv[8] = { g_eax, g_ecx, g_edx, g_ebx, g_esi, g_edi, g_ebp, g_esp }, np;
+        g_esp -= 4u;
+        GUEST32(g_esp) = 0x002DA399u;
+        sub_002DE370();
+        np = g_eax;
+        g_eax = sv[0]; g_ecx = sv[1]; g_edx = sv[2]; g_ebx = sv[3]; g_esi = sv[4]; g_edi = sv[5]; g_ebp = sv[6]; g_esp = sv[7];
+        s_wm_made++;
+        if (np >= 0x80000000u && np < 0x84000000u && !(np & 3u)) {
+            put = np;
+            thr = GUEST32(dev + 4u);
+        }
+    }
+    if (!(put >= 0x80000000u && put < 0x84000000u && !(put & 3u)) || !(thr > put)) {   /* the push buffer's ring runs from 0x80005000 up: a bound of 0x80010000 skipped ~4% of the markers (the blink) */
+        s_wm_skipped++;
+        if (on)
+            s_wm_open = 0;
+        s_wm_skip_be[on ? 0 : 1]++;
+        s_wm_last_gap = (int)(thr - put);
+        s_wm_last_end = (int)(GUEST32(dev + 0x28u) - put);
+        if (s_wm_skipped <= 40u)                /* always on: the blink hunt (a skipped marker = an unlit frame) */
+            fprintf(stderr, "[WPNMARK] SKIP %s #%u: put %08x thr %08x end %08x made-room %u\n", on ? "begin" : "end", s_wm_skipped, put, thr,
+                    GUEST32(dev + 0x28u), s_wm_made);
+        goto done;
+    }
+    GUEST32(put) = 0x00040100u;
+    GUEST32(put + 4u) = on ? 0x57504C12u : 0x57504C10u;
+    GUEST32(dev) = put + 8u;
+    s_wm_open = on;
+    s_wm_sent++;
+done:
+    if (log_on) {
+        double t = fov_now_ms();
+        if (t - last > 1000.0) {
+            last = t;
+            fprintf(stderr, "[WPNMARK] game side: sent %u made-room %u skipped %u (begin %u end %u; last skip thr-put %d, [dev+0x28]-put %d) level %d\n",
+                    s_wm_sent, s_wm_made, s_wm_skipped, s_wm_skip_be[0], s_wm_skip_be[1], s_wm_last_gap, s_wm_last_end, nv2a_gpu_weapon_level());
+        }
+    }
+}
+
+static void gun_sway_view(uint32_t view)
+{
+    uint32_t ret, p;
+    GunSway *g = NULL;
+    int i, is_main;
+    gs_cfg();
+    tp_cfg();
+    fpb_cfg();
+    fc_cfg();
+    wl_cfg();
+    if (!view)
+        return;
+    ret = GUEST32(g_esp);
+    if (ret != 0x80D67u && ret != 0xBEAC5u && ret != 0xF463Fu && ret != 0xF46DDu)
+        return;
+    if (ret == 0xF463Fu || ret == 0xF46DDu)    /* before any of the early returns below (freecam, third person): an end must follow a begin */
+        wpn_mark(ret == 0xF463Fu);
+    p = GUEST32(view + 0xE4);
+    if (!p)
+        return;
+    is_main = fc_track_main(view);
+    if (ret == 0x80D67u)
+        tp_keys();
+    if (s_tp_on <= 0 && fc_view(view, p, ret))
+        return;                                 /* flying: the gun sway and the run pose do not apply */
+    if (s_tp_on <= 0) {
+        if (s_fpb_on > 0) {                     /* first-person body: set once a frame, kept for the other calls of the frame */
+            if (ret == 0x80D67u && is_main)
+                fp_body(p);
+        } else
+            g_nv_ghost.on = 0;
+    }
+    if (s_tp_on > 0 && is_main) {
+        if (third_view(p, ret))
+            return;                             /* the weapon sway and run pose belong to the first-person gun */
+    }
+    if (ret == 0xBEAC5u)
+        return;
+    {
+        double nowms = fov_now_ms();
+        for (i = 0; i < 2; i++)                 /* a slot whose view is gone (an earlier level) is free again */
+            if (s_gs[i].view && s_gs[i].view != view && nowms - s_gs_seen_ms[i] > 1500.0)
+                memset(&s_gs[i], 0, sizeof s_gs[i]);
+        for (i = 0; i < 2; i++)
+            if (s_gs[i].view == view) { g = &s_gs[i]; break; }
+        if (!g) {
+            for (i = 0; i < 2; i++)
+                if (!s_gs[i].view) { g = &s_gs[i]; g->view = view; break; }
+            if (!g)
+                return;
+        }
+        s_gs_seen_ms[g - s_gs] = nowms;
+    }
+    if (ret == 0xF46DDu) {                      /* the weapon pass is over: the true camera back */
+        if (g->applied) {
+            for (i = 0; i < 16; i++)
+                guest_set_f(p + 0xD0u + 4u * (uint32_t)i, g->saved[i]);
+            g->applied = 0;
+        }
+        return;
+    }
+    if (guest_f(p + 0xC0) < 0.3f)               /* not a gameplay camera (menus, cut scenes) */
+        return;
+    if (ret == 0x80D67u) {                      /* once a frame: how far the camera turned since the last one */
+        float cur[9], rel[9], px, py;
+        double now = fov_now_ms(), dt = (now - g->t) * 0.001;
+        float w, k, d, a, scale;
+        int r, c, kk;
+        for (r = 0; r < 3; r++)
+            for (c = 0; c < 3; c++)
+                cur[r * 3 + c] = guest_f(p + 0xD0u + 16u * (uint32_t)r + 4u * (uint32_t)c);
+        g->t = now;
+        if (dt < 0.0005 || dt > 0.25)
+            g->have = 0;                        /* first frame after a pause or a cut */
+        if (!g->have || !s_gs_on) {
+            memcpy(g->m, cur, sizeof cur);
+            g->have = 1;
+            g->lag[0] = g->lag[1] = g->vel[0] = g->vel[1] = 0.0f;
+            return;
+        }
+        for (r = 0; r < 3; r++)                 /* rel = prev^T * cur: the turn in the camera's own axes */
+            for (c = 0; c < 3; c++) {
+                float s = 0.0f;
+                for (kk = 0; kk < 3; kk++)
+                    s += g->m[kk * 3 + r] * cur[kk * 3 + c];
+                rel[r * 3 + c] = s;
+            }
+        memcpy(g->m, cur, sizeof cur);
+        px = 0.5f * (rel[7] - rel[5]);          /* about the right axis (pitch) */
+        py = 0.5f * (rel[2] - rel[6]);          /* about the up axis (yaw) */
+        if (fabsf(px) > 0.6f || fabsf(py) > 0.6f) {
+            g->lag[0] = g->lag[1] = g->vel[0] = g->vel[1] = 0.0f;
+            return;                             /* a jump (respawn, cut): no swing */
+        }
+        /* heavier = lower spring frequency; a bit under critical damping so the gun settles with a small overshoot */
+        w = 19.0f - 2.7f * (float)s_gs_str;     /* 16.3 .. 5.5 rad/s */
+        k = w * w;
+        d = 2.0f * 0.62f * w;
+        if (dt > 0.05)
+            dt = 0.05;
+        g->lag[0] += px;
+        g->lag[1] += py;
+        for (i = 0; i < 2; i++) {               /* the weapon follows the view like a mass on a spring */
+            a = k * g->lag[i] - d * g->vel[i];
+            g->vel[i] += a * (float)dt;
+            g->lag[i] -= g->vel[i] * (float)dt;
+        }
+        scale = 0.30f + 0.10f * (float)s_gs_str;
+        {   /* aiming down the sights (the game's own fov falls from 70) steadies the gun */
+            float f = game_view_fov_deg() / 70.0f;
+            scale *= f < 0.3f ? 0.3f : f > 1.0f ? 1.0f : f;
+        }
+        g->scale = scale;
+        if (s_gs_log) {
+            static int n;
+            if ((n++ % 30) == 0)
+                fprintf(stderr, "[GUNSWAY] frame %u turn %.4f %.4f lag %.4f %.4f vel %.3f %.3f scale %.2f dt %.4f\n", g_game_frames,
+                        (double)px, (double)py, (double)g->lag[0], (double)g->lag[1], (double)g->vel[0], (double)g->vel[1],
+                        (double)scale, dt);
+        }
+        return;
+    }
+    /* ret == 0xF463F: the weapon pass */
+    if (!g->have || (!s_gs_on && !(s_rp_on > 0 && s_rp_blend > 0.0f)))
+        return;
+    {
+        float scale = g->scale > 0.0f ? g->scale : 0.5f, lx = 0.0f, ly = 0.0f, lz = 0.0f, lim = 0.14f, ang, s, c1, ox, oy, oz, E[9];
+        float M[9], t[3];
+        int r, c, kk;
+        if (s_gs_on) {
+            lx = g->lag[0] * scale;
+            ly = g->lag[1] * scale;
+            lx = lim * tanhf(lx / lim);         /* soft stop: a hard flick cannot throw the gun off screen */
+            ly = lim * tanhf(ly / lim);
+        }
+        if (s_rp_on > 0 && s_rp_blend > 0.0f) { /* sprint: gun carried across the body, swinging with the steps */
+            float b = s_rp_blend * s_rp_blend * (3.0f - 2.0f * s_rp_blend), ph = s_rp_phase;
+            ly += b * (s_rp_pose[0] + s_rp_bob[0] * sinf(ph));
+            lx += b * (s_rp_pose[1] + s_rp_bob[1] * cosf(2.0f * ph));
+            lz += b * (s_rp_pose[2] + s_rp_bob[2] * sinf(ph));
+        }
+        ang =sqrtf(lx * lx + ly * ly + lz * lz);
+        if (ang < 1e-5f)
+            return;
+        for (i = 0; i < 16; i++)
+            g->saved[i] = guest_f(p + 0xD0u + 4u * (uint32_t)i);
+        ox = lx / ang;                          /* rotation vector (lx, ly, lz): axis, angle */
+        oy = ly / ang;
+        oz = lz / ang;
+        s = sinf(ang);
+        c1 = 1.0f - cosf(ang);
+        /* Rodrigues: E = I + s [a]x + (1 - cos) [a]x^2, a = (ox, oy, oz) */
+        E[0] = 1.0f - c1 * (oy * oy + oz * oz);  E[1] = c1 * ox * oy - s * oz;  E[2] = c1 * ox * oz + s * oy;
+        E[3] = c1 * ox * oy + s * oz;  E[4] = 1.0f - c1 * (ox * ox + oz * oz);  E[5] = c1 * oy * oz - s * ox;
+        E[6] = c1 * ox * oz - s * oy;  E[7] = c1 * oy * oz + s * ox;  E[8] = 1.0f - c1 * (ox * ox + oy * oy);
+        for (r = 0; r < 3; r++)
+            for (c = 0; c < 3; c++)
+                M[r * 3 + c] = g->saved[r * 4 + c];
+        t[0] = g->saved[12]; t[1] = g->saved[13]; t[2] = g->saved[14];
+        for (r = 0; r < 3; r++)
+            for (c = 0; c < 3; c++) {
+                float sum = 0.0f;
+                for (kk = 0; kk < 3; kk++)
+                    sum += M[r * 3 + kk] * E[kk * 3 + c];
+                guest_set_f(p + 0xD0u + 16u * (uint32_t)r + 4u * (uint32_t)c, sum);
+            }
+        for (c = 0; c < 3; c++)
+            guest_set_f(p + 0x100u + 4u * (uint32_t)c, t[0] * E[0 * 3 + c] + t[1] * E[1 * 3 + c] + t[2] * E[2 * 3 + c]);
+        g->applied = 1;
+    }
+}
+
 /* The view update (this = view, camera params at +0xE4), several times a frame. Everything that reads the
  * params' fov (+0xC0), not only the projection call, has to see the widened value, or the game's own
  * visibility tests keep culling with the old view cone: characters and objects vanish at the screen edges.
@@ -797,6 +1816,28 @@ void sub_0018E150_enter(void)
     int k, mine = 0;
     double now;
     fov_poll();
+    gun_sway_view(view);
+    {   /* RECOMP_VIEW_LOG=1: every call in three short windows of the player's view updates (who calls, arg, fov, camera transform) */
+        static int on = -1;
+        static uint32_t n;
+        if (on < 0) {
+            const char *e = getenv("RECOMP_VIEW_LOG");
+            on = e && *e == '1';
+        }
+        if (on && view && GUEST32(view + 0xE4)) {
+            uint32_t p = GUEST32(view + 0xE4);
+            if (guest_f(p + 0xC0) > 0.3f) {
+                n++;
+                if ((n >= 600 && n < 680) || (n >= 1500 && n < 1580) || (n >= 2400 && n < 2480))
+                    fprintf(stderr, "[VCALL] n %u frame %u ret %08X arg %08X view %08X fov %.2f r0 %.3f %.3f %.3f r1 %.3f %.3f %.3f r2 %.3f %.3f %.3f pos %.2f %.2f %.2f f190 %u\n",
+                            n, g_game_frames, GUEST32(g_esp), GUEST32(g_esp + 4), view, (double)(guest_f(p + 0xC0) * 57.29578f),
+                            (double)guest_f(p + 0xD0), (double)guest_f(p + 0xD4), (double)guest_f(p + 0xD8),
+                            (double)guest_f(p + 0xE0), (double)guest_f(p + 0xE4), (double)guest_f(p + 0xE8),
+                            (double)guest_f(p + 0xF0), (double)guest_f(p + 0xF4), (double)guest_f(p + 0xF8),
+                            (double)guest_f(p + 0x100), (double)guest_f(p + 0x104), (double)guest_f(p + 0x108), (unsigned)GUEST8(p + 0x190));
+            }
+        }
+    }
     if (s_fov_mode != 1 || !view)
         return;
     params = GUEST32(view + 0xE4);
@@ -865,6 +1906,58 @@ void sub_0018E150_enter(void)
     guest_set_f(params + 0xC0, r->wide);
     if (r->from != r->to)
         GUEST8(params + 0x194) = 1;             /* an ease is running: rebuild the projection every frame */
+}
+
+/* GUN SWAY research: sub_0018E150 builds the view matrix (4x4 floats at mat) of one view (this = view) just
+ * before it hands it to the camera. RECOMP_VIEW_LOG=1 logs, per view object, every time that matrix or the
+ * camera params' transform (params + 0xD0) changes, so the weapon's view (fixed to the camera?) can be told apart. */
+void game_view_matrix_hook(uint32_t mat, uint32_t view)
+{
+    static int on = -1, lines, nseen;
+    static uint32_t seen[8], seen_frame, calls_in_frame;
+    static float last[8][16];
+    float m[16], p[16];
+    uint32_t params;
+    int k, i, changed = 0;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_VIEW_LOG");
+        on = e && *e == '1';
+    }
+    if (g_game_frames != seen_frame) {
+        seen_frame = g_game_frames;
+        calls_in_frame = 0;
+    }
+    calls_in_frame++;
+    if (!on || lines >= 400)
+        return;
+    for (k = 0; k < nseen && seen[k] != view; k++) {}
+    if (k == nseen) {
+        if (nseen >= 8)
+            return;
+        seen[nseen++] = view;
+        memset(last[k], 0, sizeof last[k]);
+        changed = 1;
+    }
+    for (i = 0; i < 16; i++)
+        m[i] = guest_f(mat + 4u * (uint32_t)i);
+    for (i = 0; i < 16; i++)
+        if (fabsf(m[i] - last[k][i]) > 1e-4f)
+            changed = 1;
+    if (!changed)
+        return;
+    memcpy(last[k], m, sizeof m);
+    params = GUEST32(view + 0xE4);
+    for (i = 0; i < 16; i++)
+        p[i] = params ? guest_f(params + 0xD0u + 4u * (uint32_t)i) : 0.0f;
+    lines++;
+    fprintf(stderr, "[VIEW] frame %u call %u view %08X params %08X cam %08X fov %.2f\n", g_game_frames, calls_in_frame, view,
+            params, GUEST32(view + 0x8C4), params ? (double)(guest_f(params + 0xC0) * 57.29578f) : 0.0);
+    fprintf(stderr, "[VIEW]   mat %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f\n",
+            (double)m[0], (double)m[1], (double)m[2], (double)m[3], (double)m[4], (double)m[5], (double)m[6], (double)m[7],
+            (double)m[8], (double)m[9], (double)m[10], (double)m[11], (double)m[12], (double)m[13], (double)m[14], (double)m[15]);
+    fprintf(stderr, "[VIEW]   d0  %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f\n",
+            (double)p[0], (double)p[1], (double)p[2], (double)p[3], (double)p[4], (double)p[5], (double)p[6], (double)p[7],
+            (double)p[8], (double)p[9], (double)p[10], (double)p[11], (double)p[12], (double)p[13], (double)p[14], (double)p[15]);
 }
 
 /* The game's per-object draw distance test (sub_00130010 / sub_0012FCA0): an object is drawn while
@@ -1774,6 +2867,155 @@ static uint32_t wd_find_ballist_base(uint32_t target)
     return 0;
 }
 
+/* Damage mode (ai_tuning.c): is the weapon whose ballistics row starts with this id (= weapon entry +0x124) one of the
+ * single-shot heavy guns (bolt-action / scoped / semi-auto rifles)? Names come from the entries the weapon loader
+ * captured; a name that cannot be read counts as light. name_out (optional) gets the weapon's name for the log. */
+int game_weapon_is_heavy(uint32_t row_id, char *name_out, size_t name_sz)
+{
+    int e;
+    for (e = 0; e < s_wd_n; e++) {
+        char *n;
+        if (!s_wd[e].have || s_wd[e].orig[0x124 / 4] != row_id)
+            continue;
+        if (!s_wd[e].name_have)
+            s_wd[e].name_have = wd_read_name(s_wd[e].orig[0x0E0 / 4], s_wd[e].name, sizeof s_wd[e].name) ? 2 : 1;
+        if (s_wd[e].name_have != 2)
+            return 0;
+        n = s_wd[e].name;
+        if (name_out && name_sz) {
+            strncpy(name_out, n, name_sz - 1);
+            name_out[name_sz - 1] = 0;
+        }
+        return !_stricmp(n, "M1") || strstr(n, "Karabiner") || strstr(n, "Scoped") || strstr(n, "scoped") ||
+               strstr(n, "Sniper") || strstr(n, "sniper") || strstr(n, "Springfield") || strstr(n, "Enfield") ||
+               strstr(n, "enfield") || strstr(n, "Kar98") || strstr(n, "Gewehr") || strstr(n, "gewehr") ||
+               strstr(n, "Mosin") || strstr(n, "Garand") || strstr(n, "MN1891") || strstr(n, "MNVP") || strstr(n, "SVT") || strstr(n, "Tokarev");
+    }
+    return 0;
+}
+
+/* SCOPE ZOOM: is the weapon in the player's hands one with a real scope (a sniper)? At the start of a level the game's scope
+ * opens at the same fov as iron sights (68 degrees) until the first D-pad press sets its zoom, so the fov alone cannot tell
+ * a scope from aiming down the sights. The held weapon object (soldier + 0x1128) points at its definition entry somewhere in
+ * its first 0x400 bytes; the entry's name says if it has a scope. Cached per weapon object. */
+#define SW_MEM32(a) (*(volatile uint32_t *)((uintptr_t)g_xbox_mem_offset + (uint32_t)(a)))
+int game_held_weapon_scoped(void)
+{
+    extern uint32_t game_pc_get(void);
+    static uint32_t cw, cfail;
+    static int cres;
+    uint32_t pc = game_pc_get(), sol, w, i;
+    int e;
+    if (pc < 0x80000000u || !wd_guest_readable(pc, 0x1D0))     /* the player object is freed / rebuilt while a level loads: never trust the pointers blindly */
+        return 0;
+    sol = SW_MEM32(pc + 0x1CC);
+    if (sol < 0x80000000u || !wd_guest_readable(sol, 0x1130))
+        return 0;
+    w = SW_MEM32(sol + 0x1128);
+    if (w < 0x80000000u || !wd_guest_readable(w, 0x400))
+        return 0;
+    if (w == cw)
+        return cres;
+    /* the object holds the weapon's id (entry + 0x124), a pointer to its entry, or a pointer to the ballistics row whose first
+     * word is that id: any of the three names the entry */
+    for (e = 0; e < s_wd_n; e++) {
+        uint32_t id = s_wd[e].orig[0x124 / 4], va = s_wd[e].va;
+        char n[32];
+        if (!id || !va)
+            continue;
+        for (i = 0; i < 0x400; i += 4) {
+            uint32_t v = SW_MEM32(w + i);
+            int hit = v == id || (v >= va && v < va + 0x164u) ||
+                      (v >= 0x80000000u && v < 0x84000000u && wd_guest_readable(v, 4) && SW_MEM32(v) == id);
+            if (!hit)
+                continue;
+            if (!wd_read_name(s_wd[e].orig[0x0E0 / 4], n, sizeof n))
+                break;
+            cw = w;
+            cres = strstr(n, "Scoped") || strstr(n, "scoped") || strstr(n, "Karabiner") || strstr(n, "Sniper") ||
+                   strstr(n, "sniper") || strstr(n, "MN1891") || strstr(n, "MNVP") || strstr(n, "Springfield");
+            fprintf(stderr, "[SCOPEWPN] weapon object %08X entry %d '%s' (word +0x%X = %08X) scoped=%d\n", w, e, n, i, v, cres);
+            return cres;
+        }
+    }
+    if (cfail != w) {
+        cfail = w;
+        fprintf(stderr, "[SCOPEWPN] weapon object %08X: no entry found (%d entries); first words:", w, s_wd_n);
+        for (i = 0; i < 0x80; i += 4)
+            fprintf(stderr, " %08X", SW_MEM32(w + i));
+        fprintf(stderr, "\n");
+    }
+    return 0;
+}
+
+/* The weapon object in the player's hands (guest address), 0 when there is no player yet. Used by the grenade macro. */
+unsigned game_held_weapon_obj(void)
+{
+    extern uint32_t game_pc_get(void);
+    uint32_t pc = game_pc_get(), sol, w;
+    if (pc < 0x80000000u || !wd_guest_readable(pc, 0x1D0))
+        return 0;
+    sol = SW_MEM32(pc + 0x1CC);
+    if (sol < 0x80000000u || !wd_guest_readable(sol, 0x1130))
+        return 0;
+    w = SW_MEM32(sol + 0x1128);
+    return w >= 0x80000000u && w < 0x84000000u ? w : 0;
+}
+
+/* Is the weapon in the player's hands a grenade (Stick, Brit, Frag, anything named *renade)? 1 yes, 0 a gun, -1 not known
+ * (no player yet, or no definition entry matches the held weapon object). Found like game_held_weapon_scoped; cached per
+ * weapon object, so a frame costs one compare. Used by the grenade countdown. */
+int game_held_weapon_grenade(void)
+{
+    extern uint32_t game_pc_get(void);
+    static uint32_t cw;
+    static int cres = -1;
+    uint32_t pc = game_pc_get(), sol, w, i;
+    int e;
+    if (pc < 0x80000000u || !wd_guest_readable(pc, 0x1D0))     /* the player object is freed / rebuilt while a level loads (crash 2026-11-20 at 1_11) */
+        return -1;
+    sol = SW_MEM32(pc + 0x1CC);
+    if (sol < 0x80000000u || !wd_guest_readable(sol, 0x1130))
+        return -1;
+    w = SW_MEM32(sol + 0x1128);
+    if (w < 0x80000000u || !wd_guest_readable(w, 0x400))
+        return -1;
+    if (w == cw) {
+        static int retry;
+        if (cres >= 0 || ++retry < 240)             /* a weapon not found yet is looked for again now and then (the table may load late) */
+            return cres;
+        retry = 0;
+    }
+    cw = w;
+    cres = -1;
+    for (e = 0; e < s_wd_n && cres < 0; e++) {
+        uint32_t id = s_wd[e].orig[0x124 / 4], va = s_wd[e].va;
+        char n[32];
+        if (!id || !va)
+            continue;
+        for (i = 0; i < 0x400; i += 4) {
+            uint32_t v = SW_MEM32(w + i);
+            int hit = v == id || (v >= va && v < va + 0x164u) ||
+                      (v >= 0x80000000u && v < 0x84000000u && wd_guest_readable(v, 4) && SW_MEM32(v) == id);
+            if (!hit)
+                continue;
+            if (!wd_read_name(s_wd[e].orig[0x0E0 / 4], n, sizeof n))
+                break;
+            cres = !_stricmp(n, "Stick") || !_stricmp(n, "Brit") || !_stricmp(n, "Frag") || strstr(n, "renade") ? 1 : 0;
+            fprintf(stderr, "[GRENWPN] weapon object %08X entry %d '%s' grenade=%d\n", w, e, n, cres);
+            break;
+        }
+    }
+    if (cres < 0) {
+        static uint32_t said_w;
+        if (said_w != w) {
+            said_w = w;
+            fprintf(stderr, "[GRENWPN] weapon object %08X: no entry found (%d entries)\n", w, s_wd_n);
+        }
+    }
+    return cres;
+}
+
 /* ============================================================
  * Weapon mods (mods\weapons\<WeaponName>.txt, RECOMP_MODS / RECOMP_MODS_DIR)
  *
@@ -2158,6 +3400,222 @@ void game_super_accuracy_set(int on)
     fprintf(stderr, "[WDEF] Super Accuracy %s (settings menu)\n", on ? "on" : "off");
 }
 
+/* ARR-DTOR-DBG (cross-level weapon splice): sub_000631D0 is the destructor of the component container (vtable 0x3055E4,
+ * u16 count at +8, entries [object, x] stride 8 from +0x10; each live entry gets object->vtbl[+0x10](1)). A spliced
+ * weapon leaves one entry as heap garbage. This logs every entry whose object or vtable slot is not code, so the log
+ * shows which slot / which neighbour entries are good. Always on, cheap: only walks the entries and prints bad ones. */
+#define DT_M32(a) (*(volatile uint32_t *)((uintptr_t)g_xbox_mem_offset + (uint32_t)(a)))
+#define DT_M16(a) (*(volatile uint16_t *)((uintptr_t)g_xbox_mem_offset + (uint32_t)(a)))
+void game_arr_dtor_dbg(uint32_t self)
+{
+    static int lines, calls;
+    uint32_t cnt, i;
+    int bad = 0;
+
+    if (self < 0x10000u || self >= 0x84000000u - 0x40u || (self & 3u))
+        return;
+    cnt = DT_M16(self + 8u);
+    if (self < 0x600000u || cnt > 2048u) {          /* static container or absurd count: print its raw words (the crash run had this = 0x466960) */
+        static int big;
+        if (big < 12) {
+            uint32_t k;
+            big++;
+            fprintf(stderr, "[ARRDTOR] RAW self %08X cnt %u words:", (unsigned)self, (unsigned)cnt);
+            for (k = 0; k < 16; k++)
+                fprintf(stderr, " %X", (unsigned)DT_M32(self + k * 4u));
+            fprintf(stderr, "\n");
+        }
+    }
+    if (cnt == 0 || cnt > 2048u || self + 0x10u + cnt * 8u >= 0x84000000u)
+        return;
+    calls++;
+    for (i = 0; i < cnt; i++) {
+        uint32_t p = DT_M32(self + 0x10u + i * 8u), x = DT_M32(self + 0x14u + i * 8u), v = 0, slot = 0;
+        int ok = 1;
+        if (!p)
+            continue;
+        if (p < 0x10000u || p >= 0x84000000u - 0x40u || (p & 3u)) {
+            ok = 0;
+        } else {
+            v = DT_M32(p);
+            if (v < 0x10000u || v >= 0x84000000u - 0x40u) {
+                ok = 0;
+            } else {
+                slot = DT_M32(v + 0x10u);
+                if (slot < 0x11000u || slot >= 0x540000u)
+                    ok = 0;
+            }
+        }
+        if (!ok && lines < 80) {
+            uint32_t k;
+            bad = 1;
+            lines++;
+            fprintf(stderr, "[ARRDTOR] call#%d self %08X vtbl %08X cnt %u entry %u obj %08X x %08X vt %08X slot %08X\n",
+                    calls, (unsigned)self, (unsigned)DT_M32(self), (unsigned)cnt, (unsigned)i, (unsigned)p, (unsigned)x,
+                    (unsigned)v, (unsigned)slot);
+            if (p >= 0x10000u && p < 0x84000000u - 0x40u) {
+                fprintf(stderr, "[ARRDTOR]   obj dwords:");
+                for (k = 0; k < 12; k++)
+                    fprintf(stderr, " %X", (unsigned)DT_M32(p + k * 4u));
+                fprintf(stderr, "\n");
+            }
+        }
+    }
+    if (bad) {                                  /* the whole container once: which neighbours are good (object, vtable) */
+        fprintf(stderr, "[ARRDTOR]   entries:");
+        for (i = 0; i < cnt && i < 40u; i++)
+            fprintf(stderr, " %X/%X", (unsigned)DT_M32(self + 0x10u + i * 8u), (unsigned)DT_M32(self + 0x14u + i * 8u));
+        fprintf(stderr, "\n");
+    }
+}
+
+/* SAMPLER-DBG (cross-level weapon splice): sub_00062E40 samples an animation: for each track index edi of the clip it calls
+ * channel[edi]->vtbl+0x10 on two 80-entry object arrays at this+0x14 and this+0x154. A spliced weapon's clip leaves a slot as
+ * uninitialised heap (target 0x824A1600/1680 moved with the file size). This logs, for every bad slot, which index / how many
+ * slots are built, and once for each of the first 6 distinct good animation objects (baseline). */
+static int dt_slot_ok(uint32_t p)
+{
+    uint32_t vt, sl;
+    if (p < 0x10000u || p >= 0x84000000u - 0x40u || (p & 3u))
+        return 0;
+    vt = DT_M32(p);
+    if (vt < 0x10000u || vt >= 0x84000000u - 0x40u)
+        return 0;
+    sl = DT_M32(vt + 0x10u);
+    return sl >= 0x11000u && sl < 0x540000u;
+}
+static void dt_sampler_dump(const char *tag, uint32_t self, uint32_t idx)
+{
+    uint32_t j, a = 0, b = 0, first_bad_a = 0xFFFFu, last_good_a = 0xFFFFu;
+    uint32_t o8 = DT_M32(self + 8u);
+    for (j = 0; j < 80; j++) {
+        int oa = dt_slot_ok(DT_M32(self + 0x14u + j * 4u)), ob = dt_slot_ok(DT_M32(self + 0x154u + j * 4u));
+        a += (uint32_t)oa;
+        b += (uint32_t)ob;
+        if (oa)
+            last_good_a = j;
+        else if (first_bad_a == 0xFFFFu && DT_M32(self + 0x14u + j * 4u))
+            first_bad_a = j;
+    }
+    fprintf(stderr, "[SAMPLER] %s this %08X idx %u validA %u validB %u lastGoodA %u firstBadNonNullA %u +8 %08X +10 %08X +294 %08X\n",
+            tag, (unsigned)self, (unsigned)idx, (unsigned)a, (unsigned)b, (unsigned)last_good_a, (unsigned)first_bad_a,
+            (unsigned)o8, (unsigned)DT_M32(self + 0x10u), (unsigned)DT_M32(self + 0x294u));
+    fprintf(stderr, "[SAMPLER]   slotsA:");
+    for (j = 0; j < 12; j++)
+        fprintf(stderr, " %X", (unsigned)DT_M32(self + 0x14u + j * 4u));
+    fprintf(stderr, "\n[SAMPLER]   slotsB:");
+    for (j = 0; j < 12; j++)
+        fprintf(stderr, " %X", (unsigned)DT_M32(self + 0x154u + j * 4u));
+    fprintf(stderr, "\n[SAMPLER]   obj8:");
+    if (o8 >= 0x10000u && o8 < 0x84000000u - 0x60u)
+        for (j = 0; j < 12; j++)
+            fprintf(stderr, " %X", (unsigned)DT_M32(o8 + j * 4u));
+    fprintf(stderr, "\n");
+}
+void game_sampler_dbg(uint32_t ebx_arrA, uint32_t ebp_arrB, uint32_t idx)
+{
+    static uint32_t seen[8];
+    static int nseen, nbad;
+    uint32_t self = ebx_arrA - 0x14u;
+    int i;
+    if (ebx_arrA < 0x10000u || ebx_arrA >= 0x84000000u - 0x400u) {
+        static int odd;
+        if (odd++ < 4)
+            fprintf(stderr, "[SAMPLER] odd this %08X idx %u\n", (unsigned)self, (unsigned)idx);
+        return;
+    }
+    if (idx >= 80u) {                                   /* track index past the 80-entry channel arrays: the BAD case of the crash dumps (edi=0x140) */
+        if (nbad < 6) {
+            nbad++;
+            dt_sampler_dump("BAD-idx>=80", self, idx);
+        }
+        return;
+    }
+    if (!dt_slot_ok(DT_M32(ebx_arrA + idx * 4u)) || !dt_slot_ok(DT_M32(ebp_arrB + idx * 4u))) {
+        if (nbad < 6) {
+            nbad++;
+            dt_sampler_dump("BAD", self, idx);
+        }
+        return;
+    }
+    for (i = 0; i < nseen; i++)
+        if (seen[i] == self)
+            return;
+    if (nseen < 6) {
+        seen[nseen++] = self;
+        dt_sampler_dump("good", self, idx);
+    }
+}
+
+/* SAMPLER2-DBG: the all-channels loop of sub_00062E40 (loc_00062F27): count = MEM32(this+0x10) channels, objects in the arrays at this+0x14 / this+0x154.
+ * A bad run (merged animation bank) crashed here at load with 10000+ wild icalls: log this / count / how many slots are valid. */
+void game_sampler2_dbg(uint32_t arrA, uint32_t arrB, uint32_t count, uint32_t esp_)
+{
+    static int lines;
+    static uint32_t seen[8];
+    static int nseen;
+    uint32_t self = arrA - 0x14u, j, okA = 0, okB = 0, firstBad = 0xFFFFu;
+    int i, isnew = 1;
+    (void)arrB;
+    if (arrA < 0x10000u || arrA >= 0x84000000u - 0x400u)
+        return;
+    for (i = 0; i < nseen; i++)
+        if (seen[i] == self)
+            isnew = 0;
+    if (count <= 80u && !isnew)
+        return;
+    for (j = 0; j < count && j < 80u; j++) {
+        int a = dt_slot_ok(DT_M32(arrA + j * 4u)), b = dt_slot_ok(DT_M32(arrB + j * 4u));
+        okA += (uint32_t)a;
+        okB += (uint32_t)b;
+        if ((!a || !b) && firstBad == 0xFFFFu)
+            firstBad = j;
+    }
+    if (lines >= 14)
+        return;
+    if (count <= 80u && firstBad == 0xFFFFu) {                       /* a good new object: baseline, small ones only */
+        if (nseen < 8 && count <= 16u)
+            seen[nseen++] = self;
+        else
+            return;
+    } else if (isnew && nseen < 8)
+        seen[nseen++] = self;
+    lines++;
+    fprintf(stderr, "[SAMPLER2] this %08X count %u okA %u okB %u firstBadSlot %u +8 %08X ret %08X args %08X %08X %08X\n",
+            (unsigned)self, (unsigned)count, (unsigned)okA, (unsigned)okB, (unsigned)firstBad, (unsigned)DT_M32(self + 8u),
+            (unsigned)DT_M32(esp_), (unsigned)DT_M32(esp_ + 0x34u), (unsigned)DT_M32(esp_ + 0x38u), (unsigned)DT_M32(esp_ + 0x3Cu));
+    if (firstBad != 0xFFFFu) {
+        fprintf(stderr, "[SAMPLER2]   slots around first bad A:");
+        for (j = firstBad > 3u ? firstBad - 3u : 0u; j < firstBad + 6u && j < 90u; j++)
+            fprintf(stderr, " [%u]%X", (unsigned)j, (unsigned)DT_M32(arrA + j * 4u));
+        fprintf(stderr, "\n");
+    }
+}
+
+/* ARR-WATCH: log every change of the 0x466960 global container (this of the crashing destructor) as seen from the load pump / sampler. */
+void game_arr_watch(void)
+{
+    static uint32_t snap[8];
+    static int have, lines;
+    uint32_t k;
+    int ch = 0;
+    for (k = 0; k < 8; k++) {
+        uint32_t w = DT_M32(0x466960u + k * 4u);
+        if (!have || w != snap[k]) {
+            ch = 1;
+            snap[k] = w;
+        }
+    }
+    if (ch && lines < 40) {
+        lines++;
+        fprintf(stderr, "[ARRWATCH] #%d 466960:", lines);
+        for (k = 0; k < 8; k++)
+            fprintf(stderr, " %X", (unsigned)snap[k]);
+        fprintf(stderr, "\n");
+    }
+    have = 1;
+}
+
 void game_wdef_enter(void)
 {
     static int on = -1;
@@ -2210,9 +3668,15 @@ void game_wdef_enter(void)
         if (e == s_wd_n && s_wd_n < WD_MAX) {
             s_wd[e].va = va;
             s_wd[e].have = 0;
+            s_wd[e].name_have = 0;                                  /* a slot reused by a later level must not keep the old weapon's name */
+            s_wd[e].wmod_ballist_va = 0;
+            s_wd[e].wmod_ballist_tried = 0;
             s_wd_n++;
         } else if (e < s_wd_n) {
             s_wd[e].have = 0;                                       /* being filled again: capture later */
+            s_wd[e].name_have = 0;
+            s_wd[e].wmod_ballist_va = 0;
+            s_wd[e].wmod_ballist_tried = 0;
         }
     }
 }
@@ -2233,8 +3697,8 @@ void game_wdef_enter(void)
  * multipliers (override the level). */
 #define VX_ENT 0x184
 #define VX_WORDS (VX_ENT / 4)
-#define VX_MAX 512
-static struct { uint32_t va; uint32_t mgr; uint32_t tbl; int have; int blood; int weather; uint32_t hash; uint32_t orig[VX_WORDS]; } s_vx[VX_MAX];
+#define VX_MAX 1024                     /* blood + rain + every explosion definition of a level */
+static struct { uint32_t va; uint32_t mgr; uint32_t tbl; int have; int blood; int weather; int expl; uint32_t hash; uint32_t orig[VX_WORDS]; } s_vx[VX_MAX];
 /* The entry table may be reallocated while loading: an address is only used while the manager still points at the
  * table it was taken from. */
 static int vx_alive(int e)
@@ -2289,31 +3753,46 @@ static int ex_cmp(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
+/* the sorted name hashes of the explosion particle definitions (built once) */
+static void ex_build(void)
+{
+    char path[200], *c;
+    size_t i;
+    if (s_ex_n >= 0)
+        return;
+    s_ex_n = 0;
+    for (i = 0; i < sizeof k_explosion_defs / sizeof k_explosion_defs[0]; i++) {
+        snprintf(path, sizeof path, "file:\\z:\\moh4\\data\\shared\\vfx\\%s", k_explosion_defs[i]);
+        s_ex_hash[s_ex_n++] = vx_name_hash(path);
+        for (c = path; *c; c++)
+            if (*c == '\\')
+                *c = '/';
+        s_ex_hash[s_ex_n++] = vx_name_hash(path);
+    }
+    qsort(s_ex_hash, (size_t)s_ex_n, sizeof s_ex_hash[0], ex_cmp);
+}
+
+static int ex_is_explosion(uint32_t hash)
+{
+    ex_build();
+    return bsearch(&hash, s_ex_hash, (size_t)s_ex_n, sizeof s_ex_hash[0], ex_cmp) != NULL;
+}
+
 void game_fx_placed(uint32_t emitter)
 {
     const uint8_t *mem = (const uint8_t *)(uintptr_t)g_xbox_mem_offset;
     static float range = 14.0f;
     static DWORD last;
-    static int logged;
+    static int logged, inited;
     uint32_t def, hash, cam;
     float dx, dy, dz, d;
     DWORD now;
-    if (s_ex_n < 0) {
-        char path[200], *c;
+    if (!inited) {
         const char *e = getenv("RECOMP_SCREENFX_EXPLODE_DIST");
-        size_t i;
+        inited = 1;
         if (e && atof(e) > 0.0)
             range = (float)atof(e);
-        s_ex_n = 0;
-        for (i = 0; i < sizeof k_explosion_defs / sizeof k_explosion_defs[0]; i++) {
-            snprintf(path, sizeof path, "file:\\z:\\moh4\\data\\shared\\vfx\\%s", k_explosion_defs[i]);
-            s_ex_hash[s_ex_n++] = vx_name_hash(path);
-            for (c = path; *c; c++)
-                if (*c == '\\')
-                    *c = '/';
-            s_ex_hash[s_ex_n++] = vx_name_hash(path);
-        }
-        qsort(s_ex_hash, (size_t)s_ex_n, sizeof s_ex_hash[0], ex_cmp);
+        ex_build();
         fprintf(stderr, "[SCREENFX] %d explosion definition hashes, range %.1f\n", s_ex_n, (double)range);
     }
     /* sub_001329A0 is a vtable slot shared by more than one class: only the particle emitter (vtable 0x310D20) has the
@@ -2459,6 +3938,11 @@ static int wx_menu_up(void)
     return mem[0x378964u] == 1;
 }
 
+int recomp_menu_up(void)
+{
+    return wx_menu_up();
+}
+
 /* End (or Pause) = dump the weather emitters' structs: press it once outdoors and once indoors and compare the lines
  * (which byte flips tells the game's own indoor / outdoor switch). */
 static void wx_dump(void)
@@ -2516,7 +4000,7 @@ void game_rain_poll(void)
     }
     if (s_wx_n < 0)
         wx_init();
-    if (recomp_screenfx_get(2) <= 0 || !game_rain_on_get()) {
+    if ((recomp_screenfx_get(2) <= 0 && game_weaponlight_get() <= 0) || !game_rain_on_get()) {   /* the weapon gets wet even with Screen rain off */
         if (was != 0)
             recomp_screenfx_rain(0.0f);
         was = 0;
@@ -2687,6 +4171,41 @@ static void vx_apply_weather(int e)
         p[k / 4] = vx_w(vx_f(o[k / 4]) * sp);
 }
 
+/* Recomp Settings "Explosion size": the particle definitions of every explosion (grenades, rockets and tank shells, barrels,
+ * fuel tanks, demolition charges, AA guns: explosion_defs.h) are rewritten from the captured originals, like the blood and
+ * the rain: the four size floats (+0xC0..+0xCC) and the six velocity floats (+0xA4..+0xB8) times the level's factor, so the
+ * fireball, the smoke and the flying debris all grow together. The emit count and the life stay as the game made them (the
+ * particle pool is sized from them). A change reaches the next explosion; nothing runs per frame. Level 0 = the game's own.
+ * The damage and the blast radius of the game are NOT touched. RECOMP_EXPLOSION_SIZE=0..4 */
+static const float k_ex_size[5] = { 1.0f, 1.5f, 2.0f, 3.0f, 4.0f };
+static const char *const k_ex_name[5] = { "Normal", "x1.5", "x2", "x3", "x4" };
+static int s_ex_lv = -1;
+
+static void ex_level_init(void)
+{
+    const char *e;
+    if (s_ex_lv >= 0)
+        return;
+    e = getenv("RECOMP_EXPLOSION_SIZE");
+    s_ex_lv = e && e[0] ? atoi(e) : 0;
+    s_ex_lv = s_ex_lv < 0 ? 0 : s_ex_lv > 4 ? 4 : s_ex_lv;
+}
+
+static void vx_apply_explosion(int e)
+{
+    uint8_t *mem = (uint8_t *)(uintptr_t)g_xbox_mem_offset;
+    uint32_t *p = (uint32_t *)(mem + s_vx[e].va);
+    const uint32_t *o = s_vx[e].orig;
+    float k;
+    int i;
+    ex_level_init();
+    k = k_ex_size[s_ex_lv];
+    for (i = 0xC0; i <= 0xCC; i += 4)
+        p[i / 4] = vx_w(vx_f(o[i / 4]) * k);
+    for (i = 0xA4; i <= 0xB8; i += 4)
+        p[i / 4] = vx_w(vx_f(o[i / 4]) * k);
+}
+
 /* Recomp Settings "Blood colour": 0 = the game's own, 1 = crimson (default), 2 = dark red, 3 = custom (hue / saturation / brightness). */
 #define BLOOD_COL_N 4
 static int s_blood_col = 1;
@@ -2755,6 +4274,14 @@ static void vx_colors(int out[4][3])
     }
 }
 
+static void game_blood_main_rgb(float rgb[3])
+{
+    int c[4][3], k;
+    vx_colors(c);
+    for (k = 0; k < 3; k++)
+        rgb[k] = (float)c[1][k] / 255.0f;
+}
+
 static void vx_set_level(int l)
 {
     s_blood_level = l < 0 ? 0 : l > 3 ? 3 : l;
@@ -2821,6 +4348,15 @@ static void vx_apply(void)
             } else {
                 vx_apply_weather(e);
             }
+            continue;
+        }
+        if (s_vx[e].have && s_vx[e].expl) {            /* an explosion: Explosion size */
+            if (!vx_alive(e))
+                s_vx[e].expl = 0;
+            else if (*(const uint32_t *)(mem + s_vx[e].va + 0x100) != s_vx[e].hash)
+                s_vx[e].have = 0;
+            else
+                vx_apply_explosion(e);
             continue;
         }
         if (!s_vx[e].have || !s_vx[e].blood)
@@ -2967,6 +4503,17 @@ void game_blood_custom_rgb(int rgb[3])
     vx_hsv_rgb(s_blood_hue, s_blood_sat, s_blood_bright, rgb);
 }
 
+/* the colour of the blood stains on walls and floor (BLOOD-STAIN): the spray's main colour, 0..255 */
+void game_blood_stain_rgb(int rgb[3])
+{
+    float f[3];
+    int k;
+    vx_levels();
+    game_blood_main_rgb(f);
+    for (k = 0; k < 3; k++)
+        rgb[k] = vx_clamp((int)(f[k] * 255.0f + 0.5f), 0, 255);
+}
+
 static void vx_dur_init(void)
 {
     if (s_bl_dur_idx < 0) {
@@ -3060,6 +4607,24 @@ const char *game_blood_name(int l)
     return k_blood[l < 0 ? 0 : l > 3 ? 3 : l].name;
 }
 
+int game_expsize_get(void)
+{
+    ex_level_init();
+    return s_ex_lv;
+}
+
+void game_expsize_set(int l)
+{
+    ex_level_init();
+    s_ex_lv = l < 0 ? 0 : l > 4 ? 4 : l;
+    vx_apply();
+}
+
+const char *game_expsize_name(int l)
+{
+    return k_ex_name[l < 0 ? 0 : l > 4 ? 4 : l];
+}
+
 void game_vfx_enter(void)
 {
     const uint8_t *mem = (const uint8_t *)(uintptr_t)g_xbox_mem_offset;
@@ -3116,6 +4681,7 @@ void game_vfx_poll(void)
             s_vx[e].have = 1;
             s_vx[e].blood = 0;
             s_vx[e].weather = 0;
+            s_vx[e].expl = 0;
             continue;
         }
         p = (const uint32_t *)(mem + s_vx[e].va);
@@ -3123,6 +4689,13 @@ void game_vfx_poll(void)
         s_vx[e].hash = p[0x100 / 4];
         s_vx[e].blood = s_vx[e].hash == hb || s_vx[e].hash == hh;
         s_vx[e].weather = wx_is_weather(s_vx[e].hash);
+        s_vx[e].expl = !s_vx[e].blood && !s_vx[e].weather && ex_is_explosion(s_vx[e].hash);
+        if (s_vx[e].expl && getenv("RECOMP_VFX_LOG")) {
+            float sz[4];
+            memcpy(sz, &p[0xC0 / 4], 16);
+            fprintf(stderr, "[EXPLOSION] def %08X at %08X: emit %d life %g size %g %g %g %g\n", s_vx[e].hash, s_vx[e].va,
+                    (int)p[0x70 / 4], (double)vx_f(p[0x74 / 4]), (double)sz[0], (double)sz[1], (double)sz[2], (double)sz[3]);
+        }
         s_vx[e].have = 1;
         got++;
         if (s_vx[e].weather) {                                  /* the game's rain: print what we are about to scale */
@@ -3441,4 +5014,161 @@ int game_movie_skip_pressed(void)
     armed = 0;
     fprintf(stderr, "[CUTSCENE] ended with a button\n");
     return 1;
+}
+
+/* ── PAN TRACE (RECOMP_PAN_TRACE=1) ─────────────────────────────
+ * Left-side sound fade research (2026-11-19). Three hooks inserted at the top of the generated functions:
+ *   sub_001AEFA0  emitter SetPan(angle int, 65536 = 360 deg): who sets the pan angle (caller), to what
+ *   sub_00196C66  per-voice pan: angle16 at voice+0x1C and the five speaker gains the game's table gives
+ *   sub_002B02FE  SetVolume(handle, channel, float)
+ * Every line carries the player's camera yaw (character +0x110, radians, larger = further left), so a turn can be
+ * read against what the sound did. Off unless the env var is 1: one flag test per call. */
+extern uint32_t game_pan_player(void);
+
+static float pan_cam_deg(void);
+extern float (*g_apu_cam_cb)(void);     /* apu_vp.c: lets its [RMS] line carry the camera yaw */
+
+static int pan_trace_on(void)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_PAN_TRACE");
+        on = e && *e == '1';
+        if (on) g_apu_cam_cb = pan_cam_deg;
+    }
+    return on;
+}
+
+static int pan_rate(unsigned per_sec)
+{
+    static DWORD win;
+    static unsigned n;
+    DWORD now = GetTickCount();
+    if (now - win >= 1000u) { win = now; n = 0; }
+    return n++ < per_sec;
+}
+
+static float pan_cam_deg(void)
+{
+    uint32_t p = game_pan_player();
+    return p ? guest_f(p + 0x110) * 57.29578f : 9999.0f;
+}
+
+void sub_001AEFA0_enter(void)
+{
+    static int32_t last[512];
+    static uint32_t who[512];
+    uint32_t em, h;
+    int32_t arg, d;
+    if (!pan_trace_on())
+        return;
+    em = (uint32_t)g_ecx;
+    arg = (int32_t)GUEST32(g_esp + 4);
+    h = (em >> 4) & 511u;
+    d = (arg - last[h]) & 0xFFFF;
+    if (d > 0x8000) d -= 0x10000;
+    if (who[h] == em && d > -0x0400 && d < 0x0400)
+        return;
+    who[h] = em;
+    last[h] = arg;
+    if (pan_rate(150))
+        fprintf(stderr, "[PANSET] t=%u cam=%.1f em=%08X ret=%08X arg=%d (%.1f deg) handle=%08X cls=%08X\n",
+                (unsigned)GetTickCount(), (double)pan_cam_deg(), em, GUEST32(g_esp), arg,
+                (double)(arg & 0xFFFF) * 360.0 / 65536.0, GUEST32(em + 0xC4), GUEST32(em + 0x48) ? GUEST32(GUEST32(em + 0x48)) : 0u);
+}
+
+void sub_00196C66_enter(void)
+{
+    static uint16_t last[512];
+    static DWORD lastt[512];
+    uint32_t idx = GUEST32(g_esp + 4), vs, nch, ch;
+    uint16_t ang;
+    int d;
+    DWORD now;
+    char g[64];
+    if (!pan_trace_on() || idx >= 512u)
+        return;
+    vs = GUEST32(0x523BF4) + idx * 0x90u;
+    ang = GUEST16(vs + 0x1C);
+    now = GetTickCount();
+    d = (int)(uint16_t)(ang - last[idx]);
+    if (d > 0x8000) d -= 0x10000;
+    if (lastt[idx] && d > -0x0500 && d < 0x0500 && now - lastt[idx] < 3000u)
+        return;
+    last[idx] = ang;
+    lastt[idx] = now;
+    if (!pan_rate(150))
+        return;
+    nch = GUEST8(0x523A5F);
+    if (nch > 6) nch = 6;
+    g[0] = 0;
+    for (ch = 0; ch < nch; ch++) {
+        uint32_t tab = GUEST32(0x523C84 + 4u * ch);
+        char b[16];
+        snprintf(b, sizeof b, " %3u", tab ? (unsigned)GUEST8(tab + (ang >> 8)) : 0u);
+        strcat(g, b);
+    }
+    fprintf(stderr, "[PANVOICE] t=%u cam=%.1f v=%u ang=%04X (%.1f deg) gains(FC FR RR RL FL)=%s f4e=%u f25=%02X vol38=%.3f vol48=%.3f\n",
+            (unsigned)now, (double)pan_cam_deg(), idx, ang, (double)ang * 360.0 / 65536.0, g,
+            (unsigned)GUEST8(vs + 0x4E), (unsigned)GUEST8(vs + 0x25), (double)guest_f(vs + 0x38), (double)guest_f(vs + 0x48));
+}
+
+void sub_002B02FE_enter(void)
+{
+    static float last[512];
+    static uint32_t who[512];
+    uint32_t handle = GUEST32(g_esp + 4), h = (handle >> 2) & 511u;
+    int32_t ch = (int32_t)GUEST32(g_esp + 8);
+    float v = guest_f(g_esp + 12);
+    if (!pan_trace_on())
+        return;
+    if (who[h] == handle && fabsf(v - last[h]) < 0.04f)
+        return;
+    who[h] = handle;
+    last[h] = v;
+    if (pan_rate(150))
+        fprintf(stderr, "[PANVOL] t=%u cam=%.1f handle=%08X ch=%d vol=%.3f ret=%08X\n", (unsigned)GetTickCount(),
+                (double)pan_cam_deg(), handle, ch, (double)v, GUEST32(g_esp));
+}
+
+/* PAN TRACE, part 2: sub_002ECC67 = SetMixBinVolumes(handle, {count, pairs*}); each pair is (bin, volume in 1/100 dB). This is
+ * exactly what the game gives the voice. Per handle it logs the pairs and the level each ear gets from them with the stereo
+ * downmix (centre and rears at 0.7071, LFE 0.5), in dB re full scale, whenever that level moves by 1 dB or every 2 s, so the
+ * game's own gain for one voice can be followed through a turn without guessing the content level. */
+void sub_002ECC67_enter(void)
+{
+    static uint32_t hnd[256];
+    static float lastL[256], lastR[256];
+    static DWORD lastt[256];
+    uint32_t handle = GUEST32(g_esp + 4), st = GUEST32(g_esp + 8), cnt, arr, i, h = (handle >> 2) & 255u;
+    double a[8] = { 0 }, L, R, dl, dr;
+    char b[160];
+    DWORD now;
+    if (!pan_trace_on() || !st)
+        return;
+    cnt = GUEST32(st);
+    arr = GUEST32(st + 4);
+    if (cnt == 0 || cnt > 8u || !arr)
+        return;
+    b[0] = 0;
+    for (i = 0; i < cnt; i++) {
+        uint32_t bin = GUEST32(arr + 8u * i);
+        int32_t mb = (int32_t)GUEST32(arr + 8u * i + 4);
+        char t[24];
+        if (bin < 8u)
+            a[bin] += mb <= -10000 ? 0.0 : pow(10.0, mb / 2000.0);
+        snprintf(t, sizeof t, " %u:%d", (unsigned)bin, (int)mb);
+        if (strlen(b) < 130) strcat(b, t);
+    }
+    L = a[0] + 0.7071 * a[2] + 0.5 * a[3] + 0.7071 * a[4];
+    R = a[1] + 0.7071 * a[2] + 0.5 * a[3] + 0.7071 * a[5];
+    dl = L > 1e-6 ? 20.0 * log10(L) : -120.0;
+    dr = R > 1e-6 ? 20.0 * log10(R) : -120.0;
+    now = GetTickCount();
+    if (hnd[h] == handle && lastt[h] && now - lastt[h] < 2000u && fabs(dl - lastL[h]) < 1.0 && fabs(dr - lastR[h]) < 1.0)
+        return;
+    hnd[h] = handle; lastL[h] = (float)dl; lastR[h] = (float)dr; lastt[h] = now;
+    if (pan_rate(400))
+        fprintf(stderr, "[PANPAIR] t=%u cam=%.1f handle=%08X ret=%08X pairs(bin:mB)%s earL=%.1f earR=%.1f dB\n", (unsigned)now,
+                (double)pan_cam_deg(), handle, GUEST32(g_esp), b, dl, dr);
 }

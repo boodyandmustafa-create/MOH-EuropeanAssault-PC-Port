@@ -2055,6 +2055,11 @@ static void music_tap(uint32_t v, const float samples[][2], int n, bool stream,
  * read in, where it stopped, and whether it has gone round its loop since
  * it started. Only the VP thread touches them. */
 static uint32_t s_lag_frame;
+/* RECOMP_APU_3D: energy each speaker bin received, split into effect voices (v < 224) and the
+ * software-mix ring (v >= 224), printed with the [MIX] line as [RMS]. */
+static double s_rms_sq[3][8];   /* class 0 effects, 1 ring (v>=224), 2 v<64; bins 0-5, 6 = even >=6, 7 = odd >=6 */
+static unsigned s_rms_v64;      /* v<64 voices processed in the window */
+float (*g_apu_cam_cb)(void);
 static uint32_t s_lag_seen[MCPX_HW_MAX_VOICES], s_lag_last_cbo[MCPX_HW_MAX_VOICES];
 static uint8_t s_lag_lapped[MCPX_HW_MAX_VOICES];
 
@@ -2774,6 +2779,19 @@ static void voice_process(MCPXAPUState *d,
         for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
             mixbins[bin[b]][i] += (g0 + step * (i + 1)) * samples[i][b % channels];
         }
+        {
+            static int rms_on = -1;
+            if (rms_on < 0) rms_on = apu_env_on("RECOMP_APU_3D");
+            if (rms_on && g > 0.0f) {
+                double sq = 0.0;
+                for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                    float x = (g0 + step * (i + 1)) * samples[i][b % channels];
+                    sq += (double)x * x;
+                }
+                s_rms_sq[v >= 224 ? 1 : (v < 64 ? 2 : 0)][bin[b] < 6 ? bin[b] : 6 + (bin[b] & 1)] += sq;
+                if (b == 0 && v < 64) s_rms_v64++;
+            }
+        }
     }
     d->vp.filters[v].gain_valid = true;
 
@@ -2916,6 +2934,32 @@ void mcpx_apu_vp_frame(MCPXAPUState *d,
             fprintf(stderr, "[MIX] t=%u f=%u FL=%.3f FR=%.3f FC=%.3f LFE=%.3f RL=%.3f RR=%.3f\n",
                     VEV_NOW(), (unsigned)s_lag_frame,
                     pkb[0], pkb[1], pkb[2], pkb[3], pkb[4], pkb[5]);
+            {
+                /* mean power per frame over the last 150 frames, in dBFS; LR = the stereo output the ears get */
+                double n = 150.0 * NUM_SAMPLES_PER_FRAME, lr[2];
+                float db[3][8];
+                static const char *cn[3] = { "eff", "ring", "v<64" };
+                extern void mcpx_apu_dsp_take_lr(double *l, double *r);
+                for (int c = 0; c < 3; c++)
+                    for (int b = 0; b < 8; b++) {
+                        double p = s_rms_sq[c][b] / n;
+                        db[c][b] = p > 1e-12 ? (float)(10.0 * log10(p)) : -120.0f;
+                    }
+                mcpx_apu_dsp_take_lr(&lr[0], &lr[1]);
+                for (int c = 0; c < 3; c++)
+                    fprintf(stderr, "[RMS] t=%u f=%u cam=%.0f %s FL=%.1f FR=%.1f FC=%.1f LFE=%.1f RL=%.1f RR=%.1f hiE=%.1f hiO=%.1f\n",
+                            VEV_NOW(), (unsigned)s_lag_frame,
+                            g_apu_cam_cb ? (double)g_apu_cam_cb() : 9999.0, cn[c],
+                            db[c][0], db[c][1], db[c][2], db[c][3], db[c][4], db[c][5], db[c][6], db[c][7]);
+                fprintf(stderr, "[RMS] t=%u f=%u cam=%.0f OUT L=%.1f R=%.1f v64voices=%u\n",
+                        VEV_NOW(), (unsigned)s_lag_frame,
+                        g_apu_cam_cb ? (double)g_apu_cam_cb() : 9999.0,
+                        lr[0] > 1e-12 ? 10.0 * log10(lr[0] / n) : -120.0,
+                        lr[1] > 1e-12 ? 10.0 * log10(lr[1] / n) : -120.0,
+                        s_rms_v64 / 150u);
+                s_rms_v64 = 0;
+                memset(s_rms_sq, 0, sizeof s_rms_sq);
+            }
         }
     }
 

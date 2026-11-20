@@ -104,6 +104,29 @@ void game_aim_measure(uint32_t sp)
         s_f = fopen("ai_aim.txt", "w");
     if (!s_f)
         return;
+    if (!(owner >= pc && owner < pc + 0x100u)) {
+        /* first projectile of every (definition, owner vtable) pair that is not the player's: dump the guest return chain,
+         * it leads from the projectile init back to the decision that fired/threw it (grenade throw gate). */
+        static uint64_t seen[64];
+        static int nseen;
+        uint32_t vt = guest_ok(owner) ? gw(owner) : 0u;
+        uint64_t key = ((uint64_t)def << 32) | vt;
+        int k, found = 0;
+        for (k = 0; k < nseen; k++)
+            if (seen[k] == key) { found = 1; break; }
+        if (!found && nseen < 64) {
+            int j;
+            seen[nseen++] = key;
+            fprintf(s_f, "# STACK def %08X owner %08X vt %08X speed %g :", def, owner, vt, (double)spd);
+            for (j = 0; j < 96; j++) {
+                uint32_t v = gw(sp + (uint32_t)(j * 4));
+                if (v >= 0x11000u && v < 0x2D8280u)
+                    fprintf(s_f, " %X", v);
+            }
+            fprintf(s_f, "\n");
+            fflush(s_f);
+        }
+    }
     if (owner >= pc && owner < pc + 0x100u) {
         if (s_pos_off < 0) {
             uint32_t o;

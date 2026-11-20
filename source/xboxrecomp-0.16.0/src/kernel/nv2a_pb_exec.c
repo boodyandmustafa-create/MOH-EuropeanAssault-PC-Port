@@ -398,6 +398,10 @@ void nv2a_pb_set_semaphore_target(uint32_t guest_va) { s_sem_va = guest_va; }
 static void (*s_swm_handler)(uint32_t param);
 void nv2a_pb_set_swmethod_handler(void (*fn)(uint32_t param)) { s_swm_handler = fn; }
 
+/* WEAPON LIGHTING: set while the walk is between the weapon pass's begin / end markers (see nv2a_gpu.h). Cleared every flip. */
+volatile int g_nv_wpn_pass;
+static uint32_t g_wpn_marks;                /* begin markers reached (for the [WPN] log) */
+
 /* Unhandled methods, ranked. The interesting output is not that something was
  * skipped but which things dominate, because that is the order to implement
  * them in. */
@@ -2363,6 +2367,10 @@ typedef struct {
     int      icon;                /* a button icon of the game: console control + 1 (icon_swap.c) */
     uint32_t icon_state;          /* the icon_swap_serial its pixels were drawn for */
     uint32_t *icon_orig;          /* the game's own pixels, every level */
+    int      icon_hires;          /* laid out at the sharp size, drawn by icon_swap_fill_hires, no icon_orig */
+    int      tm_pending;          /* the game's pixels for now: its replacement picture is still being loaded */
+    uint64_t phash;               /* palettized textures only: hash of the decoded level 0 (texdec_pixel_hash), else 0 */
+    uint64_t tm_key;              /* the hash its replacement picture is filed under (hash or phash) */
 } TexDec;
 static TexDec s_texdec_tab[TEXDEC_SLOTS];
 /* Where a texture was last found: slot + 1 by a hash of what identifies it.
@@ -2390,6 +2398,15 @@ void texdec_texmod_set(int on)
     if (++s_texdec_gen == 0)
         s_texdec_gen = 1;
 }
+
+/* Blood stains (blood_stain.c) set this to the guest address of the pixels of the decal texture they rewrite: a decode of
+ * that texture logs what the GPU really sees (levels, palette address, alpha per level). */
+volatile uint32_t g_stain_tex_pix;
+volatile uint32_t g_stain_tex_pal;     /* the palette address the GPU used for it (0 = not decoded yet) */
+/* The hi-res picture (blood_stain.c): every mip level back to back (level 0 = w x h, halved down to 1x1, at most 12
+ * levels), `total` texels. The buffer is never changed once published (a new colour = a new buffer). */
+volatile const uint32_t *volatile g_stain_atlas;
+volatile uint32_t g_stain_atlas_w, g_stain_atlas_h, g_stain_atlas_total;
 
 /* For the report: decodes, the texels they wrote, and hash re-checks. */
 static uint64_t s_texdec_decodes, s_texdec_texels, s_texdec_rechecks;
@@ -2547,23 +2564,28 @@ static uint64_t texdec_hash(const Texture *t)
     return h;
 }
 
+/* A palettized (P8) texture's texdec_hash covers its indices and all 256 palette entries (1 KB, whatever the image
+ * uses), so the same picture comes out under many hashes (a 16x16 image 5712 times in a dump). This one hashes what
+ * is drawn: the decoded level 0 and its size. It names the dump file, and mods\textures accepts it as well as the
+ * old hash (the old name still wins, so packs made from old dumps keep working). */
+static uint64_t texdec_pixel_hash(const uint32_t *argb, uint32_t w, uint32_t h)
+{
+    uint32_t dim[2];
+    uint64_t hh = texdec_hash_bytes(0x50384D4F44494E58ull, (const uint8_t *)argb, (size_t)w * h * 4);
+    dim[0] = w;
+    dim[1] = h;
+    return texdec_hash_bytes(hh, (const uint8_t *)dim, 8);
+}
+
 /* A picture in mods\\textures named after this texture's hash replaces its pixels (icon_swap.c texmod_load):
  * the picture is every size it comes in, with a full mip chain made here. The slot's hash stays the game's. */
-static void texdec_texmod_install(TexDec *e)
+/* The slot's levels laid out for a rw x rh picture with a full mip chain (the pixels are the caller's to write).
+ * 0 = no memory, the slot is as it was. */
+static int texdec_relayout(TexDec *e, uint32_t rw, uint32_t rh)
 {
-    uint32_t rw = 0, rh = 0, *pic;
     uint32_t lv, n, w, h, total = 0;
     uint32_t lw[TEXDEC_MAX_LEVELS], lh[TEXDEC_MAX_LEVELS], lo[TEXDEC_MAX_LEVELS];
 
-    if (!texdec_texmod_get())
-        return;
-    pic = texmod_load(e->hash, &rw, &rh);
-    if (!pic)
-        return;
-    if (!rw || !rh) {
-        free(pic);
-        return;
-    }
     n = 0;
     w = rw;
     h = rh;
@@ -2578,23 +2600,178 @@ static void texdec_texmod_install(TexDec *e)
     }
     if (e->cap < total) {
         uint32_t *p = (uint32_t *)realloc(e->argb, (size_t)total * 4);
-        if (!p) {
-            free(pic);
-            return;
-        }
+        if (!p)
+            return 0;
         e->argb = p;
         e->cap = total;
     }
-    memcpy(e->argb, pic, (size_t)rw * rh * 4);
-    for (lv = 1; lv < n; lv++)
-        texmod_downsample(e->argb + lo[lv - 1], lw[lv - 1], lh[lv - 1], e->argb + lo[lv]);
     for (lv = 0; lv < n; lv++) {
         e->lv_off[lv] = lo[lv];
         e->lv_w[lv] = lw[lv];
         e->lv_h[lv] = lh[lv];
     }
     e->nlv = n;
-    free(pic);
+    return 1;
+}
+
+/* The decal texture the blood stains rewrite is drawn from their hi-res atlas (the 32x32 palettised pixels the game
+ * hashes stay as they are: a colour change rewrites them, which decodes the slot again). 1 = done. */
+static int texdec_stain_hires(TexDec *e, const Texture *t)
+{
+    const uint32_t *buf = (const uint32_t *)g_stain_atlas;
+    uint32_t aw = g_stain_atlas_w, ah = g_stain_atlas_h, total;
+    if (!buf || !g_stain_tex_pix || (t->offset & 0x0FFFFFFFu) != (g_stain_tex_pix & 0x0FFFFFFFu))
+        return 0;
+    if (!texdec_relayout(e, aw, ah))
+        return 0;
+    total = e->lv_off[e->nlv - 1] + e->lv_w[e->nlv - 1] * e->lv_h[e->nlv - 1];
+    if (total != g_stain_atlas_total)
+        return 0;
+    memcpy(e->argb, buf, (size_t)total * 4);
+    return 1;
+}
+
+/* The pictures are read and mipped by worker threads (icon_swap.c texmod_async_take): the slot keeps the game's pixels
+ * until its picture is ready (tm_pending), and texdec_lookup_raw asks again on the slot's next re-check. A ready
+ * picture is taken as it is (no copy); at most TM_FRAME_BYTES of them per frame, since each one is a GPU upload. */
+#define TM_FRAME_BYTES (24u << 20)
+static uint32_t s_tm_left = TM_FRAME_BYTES, s_tm_gen;
+
+static uint64_t texdec_tm_limit(void)
+{
+    if (s_tm_gen != s_texdec_gen) {
+        s_tm_gen = s_texdec_gen;
+        s_tm_left = TM_FRAME_BYTES;
+    }
+    return s_tm_left == TM_FRAME_BYTES ? ~0ull : (uint64_t)s_tm_left;      /* the first one of a frame always goes */
+}
+
+/* 1 when the slot now holds the replaced picture (the slot's version moves on, the GPU makes its texture again) */
+static int texdec_texmod_poll(TexDec *e)
+{
+    uint32_t *buf = NULL, rw = 0, rh = 0, total = 0, n = 0, w, h, sum = 0, lo[TEXDEC_MAX_LEVELS],
+             lw[TEXDEC_MAX_LEVELS], lh[TEXDEC_MAX_LEVELS];
+    int was_pending = e->tm_pending;
+    int r = e->tm_key ? texmod_async_take(e->tm_key, texdec_tm_limit(), &buf, &rw, &rh, &total) : 0;
+
+    e->tm_pending = r == 1;
+    if (r != 2)
+        return 0;
+    w = rw;
+    h = rh;
+    for (;;) {
+        lo[n] = sum;
+        lw[n] = w;
+        lh[n] = h;
+        sum += w * h;
+        n++;
+        if ((w <= 1 && h <= 1) || n >= TEXDEC_MAX_LEVELS)
+            break;
+        w = w > 1 ? w >> 1 : 1;
+        h = h > 1 ? h >> 1 : 1;
+    }
+    if (sum != total) {                       /* cannot happen: the loader lays out the same chain */
+        free(buf);
+        return 0;
+    }
+    memcpy(e->lv_off, lo, n * sizeof lo[0]);
+    memcpy(e->lv_w, lw, n * sizeof lw[0]);
+    memcpy(e->lv_h, lh, n * sizeof lh[0]);
+    free(e->argb);
+    e->argb = buf;
+    e->cap = total;
+    e->nlv = n;
+    s_tm_left = (uint64_t)total * 4 >= s_tm_left ? 0u : s_tm_left - total * 4u;
+    e->version = ++s_texdec_serial;
+    {
+        static uint32_t swapped;
+        swapped++;
+        if (swapped <= 40 || (swapped % 100) == 0)
+            fprintf(stderr, "  [TEXMOD] picture %u swapped in: %016llx %ux%u (%u texels, %s)\n", swapped,
+                    (unsigned long long)e->hash, rw, rh, total, was_pending ? "after waiting" : "ready at once");
+    }
+    return 1;
+}
+
+static void texdec_texmod_install(TexDec *e)
+{
+    e->tm_pending = 0;
+    e->tm_key = 0;
+    if (!texdec_texmod_get())
+        return;
+    if (texmod_has(e->hash))
+        e->tm_key = e->hash;
+    else if (e->phash && texmod_has(e->phash))
+        e->tm_key = e->phash;
+    if (e->tm_key)
+        texdec_texmod_poll(e);
+}
+
+/* The game's own aiming crosshair lives in the shared HUD sheet (hash eb0d3f9abd2b0110, 256x256): the four arms of the
+ * dynamic crosshair and its centre dot (hudart2.xml: crosshair_left/down/up/right, crosshair_dot). With the setting on
+ * those cells are made see-through here, in the game's pixels and in a replaced picture alike, so the hit marker is the
+ * only thing at the centre. A change of the setting makes every texture decode again (the same epoch as the texmods). */
+#define XH_SHEET_HASH 0xeb0d3f9abd2b0110ull
+static volatile int s_xh_hide = -1;                   /* -1 = not read yet (env RECOMP_HIDE_CROSSHAIR, default on) */
+
+int texdec_crosshair_hide_get(void)
+{
+    if (s_xh_hide < 0) {
+        const char *e = getenv("RECOMP_HIDE_CROSSHAIR");
+        s_xh_hide = !(e && e[0] == '0');
+    }
+    return s_xh_hide;
+}
+
+void texdec_crosshair_hide_set(int on)
+{
+    s_xh_hide = on ? 1 : 0;
+    s_texmod_ep++;
+}
+
+/* More cells of the same sheet (Recomp Settings "HUD: ..." rows), one bit each: 1 = the red damage-direction arcs
+ * (hit_indicator 173,76 - 256,133), 2 = the compass markers (the orange / blue / green arrows, the star and the
+ * nemesis mark, x 0-30, y 127-169 and x 18-30, y 170-182; the health ring's bar at x 4-13, y 174-179 is left alone). */
+static volatile int s_xh_cells;
+
+int texdec_hudcells_get(void)       { return s_xh_cells; }
+void texdec_hudcells_set(int mask)
+{
+    if (mask != s_xh_cells) {
+        s_xh_cells = mask;
+        s_texmod_ep++;
+    }
+}
+
+static void texdec_clear_rect(TexDec *e, uint32_t rx0, uint32_t ry0, uint32_t rx1, uint32_t ry1)   /* sheet pixels, x1 / y1 exclusive */
+{
+    uint32_t lv;
+
+    for (lv = 0; lv < e->nlv; lv++) {
+        uint32_t w = e->lv_w[lv], h = e->lv_h[lv], x, y;
+        uint32_t x0 = rx0 * w / 256u, x1 = (rx1 * w + 255u) / 256u;
+        uint32_t y0 = ry0 * h / 256u, y1 = (ry1 * h + 255u) / 256u;
+        uint32_t *px = e->argb + e->lv_off[lv];
+        if (x1 > w) x1 = w;
+        if (y1 > h) y1 = h;
+        for (y = y0; y < y1; y++)
+            for (x = x0; x < x1; x++)
+                px[(size_t)y * w + x] = 0u;
+    }
+}
+
+static void texdec_crosshair_clear(TexDec *e)
+{
+    if (e->hash != XH_SHEET_HASH || e->width != 256 || e->height != 256)
+        return;
+    if (texdec_crosshair_hide_get())
+        texdec_clear_rect(e, 131u, 94u, 143u, 126u);
+    if (s_xh_cells & 1)
+        texdec_clear_rect(e, 173u, 76u, 256u, 133u);
+    if (s_xh_cells & 2) {
+        texdec_clear_rect(e, 0u, 127u, 31u, 170u);
+        texdec_clear_rect(e, 18u, 170u, 31u, 183u);
+    }
 }
 
 static const TexDec *texdec_lookup_raw(const Texture *t)
@@ -2635,6 +2812,8 @@ static const TexDec *texdec_lookup_raw(const Texture *t)
             h = texdec_hash(t);
             s_texdec_rechecks++;
             if (h == c->hash && c->texmod == s_texmod_ep) {
+                if (c->tm_pending && texdec_texmod_poll(c))      /* its picture came in: swap it in */
+                    texdec_crosshair_clear(c);
                 c->gen = s_texdec_gen;
                 c->used = s_texdec_tick;
                 return c;
@@ -2649,6 +2828,8 @@ static const TexDec *texdec_lookup_raw(const Texture *t)
     }
     e->gen = 0;                   /* not a valid entry until fully decoded */
     e->icon = 0;
+    e->icon_hires = 0;
+    e->tm_pending = 0;
     if (e->icon_orig) {
         free(e->icon_orig);
         e->icon_orig = NULL;
@@ -2731,6 +2912,24 @@ static const TexDec *texdec_lookup_raw(const Texture *t)
             src += texdec_level_bytes(t, w, h);
         }
     }
+    if (g_stain_tex_pix && (t->offset & 0x0FFFFFFFu) == (g_stain_tex_pix & 0x0FFFFFFFu)) {
+        static int nlog;
+        g_stain_tex_pal = t->palette;
+        if (nlog++ < 12) {
+            uint32_t lv2, k2;
+            fprintf(stderr, "[STAINTEX] decode offset %08X fmt %02X %ux%u levels(FORMAT) %u decoded %u palette %08X pitch %u\n",
+                    t->offset, t->color, t->width, t->height, t->levels, e->nlv, t->palette, t->pitch);
+            for (lv2 = 0; lv2 < e->nlv; lv2++) {
+                const uint32_t *d2 = e->argb + e->lv_off[lv2];
+                uint32_t cnt = 0, tot = e->lv_w[lv2] * e->lv_h[lv2];
+                for (k2 = 0; k2 < tot; k2++)
+                    if (d2[k2] >> 24)
+                        cnt++;
+                fprintf(stderr, "[STAINTEX]   level %u %ux%u: texels with alpha %u of %u, first %08X %08X, centre %08X\n", lv2,
+                        e->lv_w[lv2], e->lv_h[lv2], cnt, tot, d2[0], tot > 1 ? d2[1] : 0, d2[tot / 2 + e->lv_w[lv2] / 2]);
+            }
+        }
+    }
     e->offset = t->offset;
     e->color = t->color;
     e->width = t->width;
@@ -2739,6 +2938,7 @@ static const TexDec *texdec_lookup_raw(const Texture *t)
     e->lo = t->offset & 0x0FFFFFFFu;
     e->hi = e->lo + tex_face_stride(t);
     e->hash = texdec_hash(t);
+    e->phash = t->color == 0x0B ? texdec_pixel_hash(e->argb, e->lv_w[0], e->lv_h[0]) : 0;
     e->version = ++s_texdec_serial;
     e->texmod = s_texmod_ep;
     e->gen = s_texdec_gen;
@@ -2775,9 +2975,19 @@ static const TexDec *texdec_lookup_raw(const Texture *t)
                 }
             }
         }
-        icon_swap_dump(e->argb, e->width, e->height, e->color, e->hash);   /* the game's own pixels */
-        if (!e->icon && tex_size_from_format(t->color) && !t->cube)
+        icon_swap_dump(e->argb, e->width, e->height, e->color, e->phash ? e->phash : e->hash);   /* the game's own pixels */
+        if (!e->icon && tex_size_from_format(t->color) && !t->cube && !texdec_stain_hires(e, t))
             texdec_texmod_install(e);
+        texdec_crosshair_clear(e);
+        if (e->icon && texdec_texmod_get()) {              /* the user's button sheets: made sharp, not at 32 px */
+            uint32_t hw = 0, hh = 0;
+            if (icon_swap_hires_size(e->icon, &hw, &hh) && texdec_relayout(e, hw, hh)) {
+                free(e->icon_orig);
+                e->icon_orig = NULL;
+                e->icon_hires = 1;
+                e->icon_state = (uint32_t)-1;              /* drawn by the first texdec_lookup */
+            }
+        }
     }
     return e;
 }
@@ -2788,6 +2998,15 @@ static const TexDec *texdec_lookup_raw(const Texture *t)
 static void texdec_icon_apply(TexDec *e)
 {
     uint32_t lv, ser = icon_swap_serial();
+    if (e->icon_hires) {
+        if (icon_swap_fill_hires(e->icon, e->argb + e->lv_off[0], e->lv_w[0], e->lv_h[0]))
+            for (lv = 1; lv < e->nlv; lv++)
+                texmod_downsample(e->argb + e->lv_off[lv - 1], e->lv_w[lv - 1], e->lv_h[lv - 1],
+                                  e->argb + e->lv_off[lv]);
+        e->icon_state = ser;
+        e->version = ++s_texdec_serial;
+        return;
+    }
     for (lv = 0; lv < e->nlv; lv++) {
         uint32_t *d = e->argb + e->lv_off[lv];
         if (e->icon == 100) {                 /* the prompt sheet: the game's pixels, then its cells redrawn */
@@ -3622,6 +3841,1170 @@ static void mesh_dump_batch(const Nv2aGpuState *st)
             st->tex[0].valid ? st->tex[0].lv_h[0] : 0, s_gpu.prim, path);
 }
 
+/* RECOMP_VSH_PROBE=1 (third-person research): the first 3 distinct vertex programs used by skinned character batches (attribute mask 0x1f,
+ * 100+ triangles) are disassembled to the log with constant rows 0..95 of their first draw, so the bone matrix layout and where the
+ * view-projection enters can be read. Lines start with [VSHPROBE]. */
+static void vsh_probe(void)
+{
+    static int on = -1;
+    static uint32_t seen[8], nseen;
+    uint32_t nins, ver, cv, i, r;
+    const float (*cst)[4];
+    if (on < 0) {
+        const char *e = getenv("RECOMP_VSH_PROBE");
+        on = e && *e == '1';
+    }
+    if (!on || s_u_used != 0x1Fu || s_gi_n < 300 || !s_vin_n || nseen >= 3)
+        return;
+    nv2a_vsh_program(&nins, &ver);
+    for (i = 0; i < nseen; i++)
+        if (seen[i] == ver)
+            return;
+    seen[nseen++] = ver;
+    cst = nv2a_vsh_constants(&cv);
+    fprintf(stderr, "[VSHPROBE] program v%u, %u instructions, %u vertices, %u tris, bone attr4 of vertex 0 = %g\n", ver, nins, s_vin_n,
+            s_gi_n / 3, (double)s_vin[(size_t)0 * s_vin_nused + s_vin_slot[4]][0]);
+    nv2a_vsh_dump_current();
+    for (r = 0; r < 96; r++)
+        fprintf(stderr, "[VSHPROBE] c[%u] %g %g %g %g\n", r, (double)cst[r][0], (double)cst[r][1], (double)cst[r][2], (double)cst[r][3]);
+}
+
+/* RECOMP_HUDPROBE=1 (ultrawide research): one [HUDPROBE] line per distinct (vertex program, texture, depth / blend state, attribute 0
+ * shape) of the GPU-vertex-program batches while a wide gameplay picture is on: which programs draw the HUD, and what screen
+ * range their input positions span (screen pixels 0..640 x 0..480 for a pre-transformed HUD vertex). Capped at 600 lines. */
+static void hud_probe(const Nv2aGpuState *st, const Nv2aGpuProgram *pg)
+{
+    static int on = -1;
+    static uint64_t seen[1024];
+    static uint32_t lines;
+    uint64_t h = 0xCBF29CE484222325ull, th = 0;
+    uint32_t j, k, slot;
+    float lo[3], hi[3];
+    if (on < 0) {
+        const char *e = getenv("RECOMP_HUDPROBE");
+        on = e && *e == '1';
+    }
+    if (!on || lines >= 600 || !s_vin_n || !pg->prog || recomp_present_aspect(0.0f) <= 0.0f)
+        return;
+    for (j = 0; j < pg->nins * 4u && j < 136u * 4u; j++)
+        h = (h ^ ((const uint32_t *)pg->prog)[j]) * 0x100000001B3ull;
+    if (st->tex[0].valid) {
+        slot = st->tex[0].slot;
+        if (slot < TEXDEC_SLOTS)
+            th = s_texdec_tab[slot].hash;
+    }
+    for (k = 0; k < 3; k++) {
+        lo[k] = 1e30f;
+        hi[k] = -1e30f;
+    }
+    for (j = 0; j < s_vin_n; j++) {
+        const float *p = s_vin[(size_t)j * s_vin_nused + s_vin_slot[0]];
+        for (k = 0; k < 3; k++) {
+            if (p[k] < lo[k]) lo[k] = p[k];
+            if (p[k] > hi[k]) hi[k] = p[k];
+        }
+    }
+    {
+        uint64_t key = h ^ (th * 0x9E3779B97F4A7C15ull) ^ ((uint64_t)st->rs.depth_test_enable << 1) ^ ((uint64_t)st->rs.blend_enable << 2)
+                     ^ ((uint64_t)(hi[0] - lo[0] > 400.0f) << 3) ^ ((uint64_t)(hi[0] <= 700.0f && lo[0] >= -50.0f) << 4)
+                     ^ ((uint64_t)s_u_used << 8);
+        uint32_t i = (uint32_t)(key ^ (key >> 32)) & 1023u;
+        while (seen[i]) {
+            if (seen[i] == (key | 1ull))
+                return;
+            i = (i + 1) & 1023u;
+        }
+        seen[i] = key | 1ull;
+    }
+    lines++;
+    fprintf(stderr, "[HUDPROBE] prog %08x %uins verts %u tris %u attrs %04x tex %016llx %ux%u zt %u zw %u blend %u pos0 x %.1f..%.1f y %.1f..%.1f z %.2f..%.2f xf %u"
+                    " surf %ux%u\n",
+            (uint32_t)(h >> 32), pg->nins, s_vin_n, s_gi_n / 3, s_u_used, (unsigned long long)th,
+            st->tex[0].valid && st->tex[0].lv_w ? st->tex[0].lv_w[0] : 0, st->tex[0].valid && st->tex[0].lv_h ? st->tex[0].lv_h[0] : 0,
+            st->rs.depth_test_enable, st->rs.depth_write,
+            st->rs.blend_enable, (double)lo[0], (double)hi[0], (double)lo[1], (double)hi[1], (double)lo[2], (double)hi[2], s_gpu.xf_mode,
+            s_gpu.clip_w, s_gpu.clip_h);
+}
+
+/* ULTRAWIDE HUD (found with RECOMP_HUDPROBE on European Assault): the HUD is drawn by two small vertex programs on the 640x480 frame.
+ *   867f4f50 (9 instructions, attributes 0x209): sprites whose input positions are screen pixels at constant z = 1.0 with depth test and
+ *            write on; the same program also draws particles and billboards in world space (depth write off, other z), which are left alone.
+ *   b4ff95b4 (3 instructions): the pre-transformed pass-through (text and the like, z at the far end).
+ * In a wide gameplay picture their x is pulled toward the centre by (16:9) / aspect, so the HUD keeps the 16:9 shape (and the game's own
+ * anamorphic look) instead of stretching across the whole width. The shader leaves vertices on the picture's edges, so full-screen
+ * quads (fades, tints) still cover everything. 0 = not a HUD batch / no wide picture. */
+static float hud_batch_k(const Nv2aGpuState *st, const Nv2aGpuProgram *pg, float *shift)
+{
+    uint64_t h = 0xCBF29CE484222325ull;
+    uint32_t j, ph;
+    float k;
+    *shift = 0.0f;
+    if ((pg->nins != 9 && pg->nins != 3) || !pg->prog || !s_vin_n)
+        return 0.0f;
+    k = recomp_wide_hud_k();
+    if (k <= 0.0f)
+        return 0.0f;
+    if (s_gpu.clip_w / (s_gpu.aa_sx > 1.0f ? s_gpu.aa_sx : 1.0f) != 640.0f
+        || s_gpu.clip_h / (s_gpu.aa_sy > 1.0f ? s_gpu.aa_sy : 1.0f) != 480.0f)
+        return 0.0f;
+    for (j = 0; j < pg->nins * 4u; j++)
+        h = (h ^ ((const uint32_t *)pg->prog)[j]) * 0x100000001B3ull;
+    ph = (uint32_t)(h >> 32);
+    if (ph == 0x867f4f50u) {
+        if (!st->rs.depth_test_enable || !st->rs.depth_write)
+            return 0.0f;
+        for (j = 0; j < s_vin_n; j++) {
+            float z = s_vin[(size_t)j * s_vin_nused + s_vin_slot[0]][2];
+            if (z < 0.99f || z > 1.01f)
+                return 0.0f;
+        }
+    } else if (ph != 0xb4ff95b4u) {
+        return 0.0f;
+    }
+    {   /* the whole batch moves as one piece (text and icons keep their own proportions): to the left edge, the right edge, or stays
+         * in the middle, by where the batch's centre is */
+        float lo = 1e30f, hi = -1e30f, c, l, r, t;
+        for (j = 0; j < s_vin_n; j++) {
+            float x = s_vin[(size_t)j * s_vin_nused + s_vin_slot[0]][0];
+            if (x < lo) lo = x;
+            if (x > hi) hi = x;
+        }
+        if (hi > lo + 0.01f) {
+            c = (lo + hi) * 0.5f / 640.0f;
+            t = (c - 0.35f) / 0.10f; t = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t; l = 1.0f - t * t * (3.0f - 2.0f * t);
+            t = (c - 0.55f) / 0.10f; t = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t; r = t * t * (3.0f - 2.0f * t);
+            *shift = (1.0f - k) * 0.5f * (r - l);
+        }
+    }
+    return k;
+}
+
+/* WEAPON LIGHTING: is this program draw one of the first-person weapon's? Between the weapon pass markers, opaque and depth-tested
+ * with a texture, and not a HUD batch. A [WPN] line a second (RECOMP_WPN_LOG=1) says how many draws were inside the markers and
+ * how many were not, and the first distinct (program, texture) pairs inside are listed: if the markers are in the right place the
+ * inside count is small and steady and the pairs are the gun and the hands. */
+static uint32_t wf_in, wf_cand, wf_el, wf_bad;     /* this frame: draws inside the weapon markers, weapon-like ones, lit ones, why not lit */
+static uint32_t wf_calls, wf_out_cand;             /* this frame: all program draws, weapon-like ones outside the markers */
+
+/* Called at every flip (nv2a_gpu.c wpn_tick): a frame where the weapon was lit before and now is not, or where only some of its draws
+ * were lit, is a blink. The first 80 are logged with the draw counts and the reasons (bit 0 no depth test, 1 no depth write, 2 no
+ * texture, 3 texture is a surface, 4 HUD batch), then a summary every 10 s. Always on, nothing is done unless the weapon lighting is on. */
+void nv2a_gpu_weapon_frame_end(void)
+{
+    static uint32_t prev_marks, prev_el, prev_cand, frames, blinks, tot_frames, tot_blinks, lines;
+    static time_t last;
+    uint32_t begun = g_wpn_marks - prev_marks;
+    int blink;
+    prev_marks = g_wpn_marks;
+    if (nv2a_gpu_weapon_level() <= 0) {
+        wf_in = wf_cand = wf_el = wf_bad = wf_calls = wf_out_cand = 0;
+        prev_el = prev_cand = 0;
+        return;
+    }
+    frames++;
+    blink = (prev_cand > 0 && wf_cand == 0) || (wf_cand > 0 && wf_el < wf_cand) || (prev_el > 0 && begun == 0);
+    if (blink) {
+        blinks++;
+        if (lines < 80) {
+            lines++;
+            fprintf(stderr, "[WPNBLINK] #%u begins %u inside %u weapon-like %u lit %u (previous frame: %u / %u) reasons %x; program draws %u, weapon-like outside %u\n",
+                    blinks, begun, wf_in, wf_cand, wf_el, prev_cand, prev_el, wf_bad, wf_calls, wf_out_cand);
+        }
+    }
+    prev_el = wf_el;
+    prev_cand = wf_cand;
+    wf_in = wf_cand = wf_el = wf_bad = wf_calls = wf_out_cand = 0;
+    {
+        time_t now = time(NULL);
+        if (now - last >= 10) {
+            if (last && blinks)
+                fprintf(stderr, "[WPNBLINK] last 10 s: %u frames, %u blinks\n", frames, blinks);
+            last = now;
+            tot_frames += frames;
+            tot_blinks += blinks;
+            frames = blinks = 0;
+        }
+    }
+    (void)tot_frames;
+    (void)tot_blinks;
+}
+
+static int wpn_batch(const Nv2aGpuState *st, const Nv2aGpuProgram *pg)
+{
+    static int log_on = -1;
+    static uint32_t n_in, n_el, n_out, n_marks_seen, lines;
+    static uint64_t seen[256];
+    static time_t last;
+    int el;
+    if (log_on < 0) {
+        const char *e = getenv("RECOMP_WPN_LOG");
+        log_on = e && *e == '1';
+    }
+    /* The bracket holds more than the gun (the first log showed HUD sprites, billboards and a full-screen render-target copy inside
+     * it, the weapon's own draws are blended with the blend on): so the weapon is the skinned mesh program (34 instructions,
+     * attributes 0x1F, the same one soldiers use) that writes depth. */
+    el = g_nv_wpn_pass && nv2a_gpu_weapon_level() > 0 && pg->nins == 34 && s_u_used == 0x1Fu && st->rs.depth_test_enable
+         && st->rs.depth_write && st->tex[0].valid && !st->tex[0].from_surface && pg->hud_k <= 0.0f;
+    if (nv2a_gpu_weapon_level() > 0) {
+        wf_calls++;
+        if (!g_nv_wpn_pass && pg->nins == 34 && s_u_used == 0x1Fu && st->rs.depth_write)
+            wf_out_cand++;
+    }
+    if (g_nv_wpn_pass && nv2a_gpu_weapon_level() > 0) {         /* per-frame counts for the blink detector (nv2a_gpu_weapon_frame_end) */
+        wf_in++;
+        if (pg->nins == 34 && s_u_used == 0x1Fu) {
+            wf_cand++;
+            if (el)
+                wf_el++;
+            else
+                wf_bad |= (uint32_t)(!st->rs.depth_test_enable) | ((uint32_t)(!st->rs.depth_write) << 1) | ((uint32_t)(!st->tex[0].valid) << 2)
+                          | ((uint32_t)(st->tex[0].from_surface != 0) << 3) | ((uint32_t)(pg->hud_k > 0.0f) << 4);
+        }
+    }
+    if (log_on) {
+        time_t now = time(NULL);
+        if (g_nv_wpn_pass) {
+            n_in++;
+            if (el)
+                n_el++;
+            if (lines < 80) {
+                uint64_t h = 0xCBF29CE484222325ull, th = 0, key;
+                uint32_t j, i;
+                for (j = 0; j < pg->nins * 4u && j < 136u * 4u; j++)
+                    h = (h ^ ((const uint32_t *)pg->prog)[j]) * 0x100000001B3ull;
+                if (st->tex[0].valid && st->tex[0].slot < TEXDEC_SLOTS)
+                    th = s_texdec_tab[st->tex[0].slot].hash;
+                key = h ^ (th * 0x9E3779B97F4A7C15ull) ^ ((uint64_t)st->rs.blend_enable << 1) ^ ((uint64_t)s_u_used << 8);
+                i = (uint32_t)(key ^ (key >> 32)) & 255u;
+                while (seen[i] && seen[i] != (key | 1ull))
+                    i = (i + 1) & 255u;
+                if (!seen[i]) {
+                    seen[i] = key | 1ull;
+                    lines++;
+                    fprintf(stderr, "[WPN] inside: prog %08x %uins attrs %04x tex %016llx %ux%u blend %u (%x/%x) zt %u zw %u verts %u tris %u eligible %d\n",
+                            (uint32_t)(h >> 32), pg->nins, s_u_used, (unsigned long long)th,
+                            st->tex[0].lv_w ? st->tex[0].lv_w[0] : 0, st->tex[0].lv_h ? st->tex[0].lv_h[0] : 0, st->rs.blend_enable,
+                            st->rs.blend_src, st->rs.blend_dst, st->rs.depth_test_enable, st->rs.depth_write, s_vin_n, s_gi_n / 3, el);
+                }
+            }
+        } else
+            n_out++;
+        if (now != last) {
+            last = now;
+            float th, tv;
+            nv2a_gpu_weapon_get_tan(&th, &tv);
+            fprintf(stderr, "[WPN] level %d markers %u (+%u) draws inside %u eligible %u outside %u tan %.3f %.3f\n", nv2a_gpu_weapon_level(),
+                    g_wpn_marks, g_wpn_marks - n_marks_seen, n_in, n_el, n_out, (double)th, (double)tv);
+            n_marks_seen = g_wpn_marks;
+            n_in = n_el = n_out = 0;
+        }
+    }
+    return el;
+}
+
+/* GHOST BODY (third person, last build). In single player the player has no body, so one is drawn from a soldier's meshes, kept in a cache.
+ *   Cache   One soldier who stands upright and still for half a second, 1..15 m away: every skinned body batch of his that frame (same
+ *           feet position, attribute mask 0x1F, 34-op program, pure-yaw object matrix) is copied: vertices, indices, the program, the render
+ *           state with the combiner and the texture decodes, and his bone matrices c[0..55] = the frozen idle pose. Always the same man.
+ *           A key (Numpad .) throws him away and takes another type.
+ *   Math    What the program reads (decoded from the vertex program and the dumps): c[0..55] 14 bone matrices (object-local, 3x4),
+ *           c[160..163] the plain view V, c[164..167] K = SP * V * A (object to clip), c[168..171] A (object to world: yaw + feet).
+ *           Every soldier batch gives SP = K * A^-1 * V^-1 (projection + viewport: constant while the fov is). A body at A' with the view
+ *           V_now is K' = SP * V_now * A'.
+ *   Draw    Every frame, at the Nth draw whose view V has the third-person camera's eye (the main pass; shadow, reflection, sky and
+ *           the first-person passes have other eyes), the cached batches are drawn at the player's feet with his heading: no soldier has
+ *           to be on screen. Fallback while that finds nothing: right after a soldier body draw of the capture's pass (V of that draw).
+ *   Takes   One loop of bone matrices of a MOVING soldier of the cached type (any speed above 0.6 m/s), per batch and time stamped. The
+ *           copy plays it when the player moves, at the rate player speed / soldier speed (0.6..1.8); standing, or while no loop is
+ *           recorded yet: the frozen idle pose. A live soldier's pose is never used.
+ * Texture decodes of the cache are checked each draw (slot + version): a stale one throws the cache away and a soldier is captured again.
+ * g_nv_ghost is written by the game side (recomp_manual.c third_view); its mirror there must have the same fields. */
+typedef struct {
+    int on;
+    uint32_t frame;             /* the game's frame counter: one per main view update */
+    float pos[3];               /* the player's feet */
+    float yaw;                  /* world heading of the camera (radians, atan2(y, x)) */
+    int yawk;                   /* which model axis is "forward": heading - yawk * 90 degrees */
+    float speed;                /* the player's ground speed, m/s over the last quarter second */
+    float eyeh;                 /* eye height above the feet (stance) */
+    int cycle;                  /* raised by a key: the next soldier type */
+    float eye[3];               /* the third-person camera's eye, world */
+    int fp;                     /* first-person body: no loop playback, head and arms hidden, shifted back, hidden when crouched */
+    float back;                 /* first-person body: metres behind the feet position (along the heading) */
+} NvGhost;
+NvGhost g_nv_ghost;
+
+#define GH_MAXB 8
+#define GH_FR 150
+#define GH_EYE_DRAW 30          /* the draw (of the main pass) after which the body is drawn */
+typedef struct { double t; float pal[224]; } GhSample;
+static GhSample gh_smp[GH_MAXB][GH_FR];
+static int gh_sn[GH_MAXB];
+static struct { int ready, rec; double t0, tlast, spd_sum; int spd_n; } gh_take;
+typedef struct {
+    uint64_t hash;
+    uint32_t vin_n, nused, slot[16], gi_n, nins, prog_ver;
+    float *vin;
+    uint32_t *gi;
+    uint32_t prog[40][4];
+    Nv2aGpuState st;
+    Nv2aRcProg rcp;
+    float pal[224];             /* c[0..55] when captured: the frozen idle pose */
+} GhBatch;
+static GhBatch gh_b[GH_MAXB];
+static int gh_bn, gh_cache_ok, gh_capturing, gh_cap_ei = -1;
+static uint32_t gh_cap_frame, gh_cva, gh_cw, gh_ch;
+static float gh_cap_pos[3];
+static uint64_t gh_ban[GH_MAXB * 4];
+static int gh_ban_n;
+static float gh_sp[16], gh_sp_drift;
+static int gh_sp_ok;
+static float gh_base[192][4];   /* the constants of the last soldier batch: lighting and the rest */
+static uint32_t gh_drawn_frame = 0xFFFFFFFFu, gh_eye_frame;
+static double gh_ft;
+typedef struct {
+    float pos[3], ppos[3];
+    double ppos_t, still_t;
+    uint32_t frame;
+    float spd;
+    int used, have, rej;
+} GhNpc;
+static GhNpc gh_npc[24];
+
+static double gh_now(void)
+{
+    static LARGE_INTEGER f;
+    LARGE_INTEGER n;
+    if (!f.QuadPart)
+        QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&n);
+    return (double)n.QuadPart / (double)f.QuadPart;
+}
+
+static void gh_m4mul(float o[16], const float a[16], const float b[16])
+{
+    float t[16];
+    int r, c, k;
+    for (r = 0; r < 4; r++)
+        for (c = 0; c < 4; c++) {
+            float s = 0.0f;
+            for (k = 0; k < 4; k++)
+                s += a[r * 4 + k] * b[k * 4 + c];
+            t[r * 4 + c] = s;
+        }
+    memcpy(o, t, sizeof t);
+}
+
+/* inverse of an affine 4x4 (bottom row 0 0 0 1): 0 if the 3x3 is singular */
+static int gh_m4inv(float o[16], const float m[16])
+{
+    float a = m[0], b = m[1], c = m[2], d = m[4], e = m[5], f = m[6], g = m[8], h = m[9], i = m[10];
+    float det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g), id, r[9];
+    int j;
+    if (fabsf(det) < 1e-6f)
+        return 0;
+    id = 1.0f / det;
+    r[0] = (e * i - f * h) * id;  r[1] = (c * h - b * i) * id;  r[2] = (b * f - c * e) * id;
+    r[3] = (f * g - d * i) * id;  r[4] = (a * i - c * g) * id;  r[5] = (c * d - a * f) * id;
+    r[6] = (d * h - e * g) * id;  r[7] = (b * g - a * h) * id;  r[8] = (a * e - b * d) * id;
+    for (j = 0; j < 3; j++) {
+        o[j * 4 + 0] = r[j * 3 + 0]; o[j * 4 + 1] = r[j * 3 + 1]; o[j * 4 + 2] = r[j * 3 + 2];
+        o[j * 4 + 3] = -(r[j * 3 + 0] * m[3] + r[j * 3 + 1] * m[7] + r[j * 3 + 2] * m[11]);
+    }
+    o[12] = o[13] = o[14] = 0.0f; o[15] = 1.0f;
+    return 1;
+}
+
+static void gh_take_reset(void)
+{
+    memset(gh_sn, 0, sizeof gh_sn);
+    gh_take.ready = 0;
+    gh_take.rec = -1;
+    gh_take.t0 = gh_take.tlast = gh_take.spd_sum = 0.0;
+    gh_take.spd_n = 0;
+}
+
+static void gh_free_cache(void)
+{
+    int i;
+    for (i = 0; i < GH_MAXB; i++) {
+        free(gh_b[i].vin);
+        free(gh_b[i].gi);
+        gh_b[i].vin = NULL;
+        gh_b[i].gi = NULL;
+    }
+    gh_bn = 0;
+    gh_cache_ok = 0;
+    gh_capturing = 0;
+    gh_take_reset();
+}
+
+/* The batch's name, as the mesh dump hashes it (first 64 vertices' positions + vertex count + triangle count). */
+static uint64_t gh_hash(const Nv2aGpuProgram *pg, uint32_t vin_n, uint32_t gi_n)
+{
+    uint64_t hh = 0xCBF29CE484222325ull;
+    uint32_t i;
+    for (i = 0; i < vin_n && i < 64; i++) {
+        const float *p = pg->vin[(size_t)i * pg->nused + pg->slot[0]];
+        uint32_t u[3];
+        memcpy(u, p, 12);
+        hh = (hh ^ u[0]) * 0x100000001B3ull; hh = (hh ^ u[1]) * 0x100000001B3ull; hh = (hh ^ u[2]) * 0x100000001B3ull;
+    }
+    hh = (hh ^ vin_n) * 0x100000001B3ull;
+    hh = (hh ^ (gi_n / 3)) * 0x100000001B3ull;
+    return hh;
+}
+
+/* Height of the cached body in its frozen pose: the vertices skinned by their bone, the spread along the object's up axis. A man who
+ * lies on the ground (a corpse stands still for ever) is a few tenths of a metre, an upright one 1.5 m and more. */
+static float gh_height(void)
+{
+    float zmin = 1e30f, zmax = -1e30f;
+    int i;
+    for (i = 0; i < gh_bn; i++) {
+        const GhBatch *b = &gh_b[i];
+        uint32_t v;
+        for (v = 0; v < b->vin_n; v++) {
+            const float *p = b->vin + ((size_t)v * b->nused + b->slot[0]) * 4;
+            const float *bi = b->vin + ((size_t)v * b->nused + b->slot[4]) * 4;
+            int row = (int)(bi[0] + 96.5f);
+            const float *m;
+            float z;
+            if (row < 0 || row > 53)
+                continue;
+            m = b->pal + (row + 2) * 4;
+            z = m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3];
+            if (z < zmin) zmin = z;
+            if (z > zmax) zmax = z;
+        }
+    }
+    return zmax > zmin ? zmax - zmin : 0.0f;
+}
+
+/* First-person body, made once per capture from the frozen pose (object space, feet = lowest vertex):
+ *   gh_auto_k  which model axis is "forward" (k * 90 degrees, 0 = +x, 1 = +y, 2 = -x, 3 = -y): the legs spread more sideways than
+ *              front to back, and the boots reach forward of the calves.
+ *   gh_cut     bones to hide: per batch and bone (row / 4), a bone whose vertices sit high (head, helmet) or far from the body's
+ *              vertical axis at chest height (arms). His own sleeves and hands are drawn by the game. */
+static uint8_t gh_cut[GH_MAXB][16];
+static int gh_auto_k = 1;
+
+static int gh_skin(const GhBatch *b, uint32_t v, float o[3])
+{
+    const float *p = b->vin + ((size_t)v * b->nused + b->slot[0]) * 4;
+    const float *bi = b->vin + ((size_t)v * b->nused + b->slot[4]) * 4;
+    int row = (int)(bi[0] + 96.5f), k;
+    if (row < 0 || row > 53)
+        return -1;
+    for (k = 0; k < 3; k++) {
+        const float *m = b->pal + (row + k) * 4;
+        o[k] = m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3];
+    }
+    return row;
+}
+
+static void gh_analyse(void)
+{
+    float zmin = 1e30f, zmax = -1e30f, h, o[3];
+    double sx = 0, sy = 0, sxx = 0, syy = 0, nl = 0, cx = 0, cy = 0;
+    double bs[GH_MAXB][16][4];
+    int cnt[GH_MAXB][16], i, r;
+    uint32_t v;
+    memset(gh_cut, 0, sizeof gh_cut);
+    memset(bs, 0, sizeof bs);
+    memset(cnt, 0, sizeof cnt);
+    for (i = 0; i < gh_bn; i++)
+        for (v = 0; v < gh_b[i].vin_n; v++)
+            if (gh_skin(&gh_b[i], v, o) >= 0) {
+                if (o[2] < zmin) zmin = o[2];
+                if (o[2] > zmax) zmax = o[2];
+            }
+    h = zmax - zmin;
+    if (h < 1.0f)
+        return;
+    for (i = 0; i < gh_bn; i++)
+        for (v = 0; v < gh_b[i].vin_n; v++) {
+            float z;
+            r = gh_skin(&gh_b[i], v, o);
+            if (r < 0)
+                continue;
+            z = o[2] - zmin;
+            if (z >= 0.12f * h && z <= 0.42f * h) {                 /* the legs: spread along each axis */
+                sx += o[0]; sy += o[1]; sxx += (double)o[0] * o[0]; syy += (double)o[1] * o[1]; nl += 1.0;
+            }
+        }
+    if (nl < 20.0)
+        return;
+    {
+        double mx = sx / nl, my = sy / nl, vx = sxx / nl - mx * mx, vy = syy / nl - my * my, fb = 0, fc = 0, ncv = 0, nbv = 0, shift;
+        int axis = vx > vy ? 1 : 0;                                  /* the smaller variance = front to back */
+        cx = mx; cy = my;
+        for (i = 0; i < gh_bn; i++)
+            for (v = 0; v < gh_b[i].vin_n; v++) {
+                float z;
+                r = gh_skin(&gh_b[i], v, o);
+                if (r < 0)
+                    continue;
+                z = o[2] - zmin;
+                if (z < 0.06f * h) { fb += o[axis]; nbv += 1.0; }
+                else if (z >= 0.15f * h && z <= 0.30f * h) { fc += o[axis]; ncv += 1.0; }
+            }
+        shift = (nbv > 0 && ncv > 0) ? fb / nbv - fc / ncv : 0.0;
+        gh_auto_k = axis == 0 ? (shift >= 0 ? 0 : 2) : (shift >= 0 ? 1 : 3);
+        fprintf(stderr, "[GHOST4] FP axes: leg variance x %.4f y %.4f -> forward axis %c, boot-calf shift %.3f m -> k %d | height %.2f, axis centre %.2f %.2f\n",
+                vx, vy, axis ? 'y' : 'x', shift, gh_auto_k, (double)h, cx, cy);
+    }
+    for (i = 0; i < gh_bn; i++)
+        for (v = 0; v < gh_b[i].vin_n; v++) {
+            r = gh_skin(&gh_b[i], v, o);
+            if (r < 0)
+                continue;
+            bs[i][r >> 2][0] += o[0]; bs[i][r >> 2][1] += o[1]; bs[i][r >> 2][2] += o[2] - zmin;
+            cnt[i][r >> 2]++;
+        }
+    for (i = 0; i < gh_bn; i++)
+        for (r = 0; r < 14; r++) {
+            double n = cnt[i][r], mx, my, mz, rr;
+            int cut;
+            if (n <= 0)
+                continue;
+            mx = bs[i][r][0] / n; my = bs[i][r][1] / n; mz = bs[i][r][2] / n;
+            rr = sqrt((mx - cx) * (mx - cx) + (my - cy) * (my - cy));
+            cut = mz > 0.78 * h || (mz > 0.45 * h && rr > 0.17);
+            gh_cut[i][r] = (uint8_t)cut;
+            fprintf(stderr, "[GHOST4] FP bone batch %d row %d: %d verts, mean %.2f %.2f z %.2f (%.0f%% of height), r %.2f -> %s\n", i, r * 4, cnt[i][r],
+                    mx, my, mz, 100.0 * mz / h, rr, cut ? "HIDE" : "keep");
+        }
+}
+
+static void gh_cap_add(const Nv2aGpuState *st, const Nv2aGpuProgram *pg, uint32_t vin_n, const uint32_t *gi, uint32_t gi_n, uint64_t hh)
+{
+    GhBatch *b;
+    int i, k;
+    if (gh_bn >= GH_MAXB || pg->nins > 40 || !st->prog || vin_n > 40000 || pg->nused > 16)
+        return;
+    for (i = 0; i < gh_bn; i++)
+        if (gh_b[i].hash == hh)
+            return;
+    for (k = 0; k < 4; k++)
+        if (st->tex[k].valid && st->tex[k].from_surface)
+            return;
+    b = &gh_b[gh_bn];
+    b->vin = (float *)malloc((size_t)vin_n * pg->nused * 16);
+    b->gi = (uint32_t *)malloc((size_t)gi_n * 4);
+    if (!b->vin || !b->gi) {
+        free(b->vin);
+        free(b->gi);
+        b->vin = NULL;
+        b->gi = NULL;
+        return;
+    }
+    memcpy(b->vin, pg->vin, (size_t)vin_n * pg->nused * 16);
+    memcpy(b->gi, gi, (size_t)gi_n * 4);
+    b->hash = hh;
+    b->vin_n = vin_n;
+    b->nused = pg->nused;
+    memcpy(b->slot, pg->slot, sizeof b->slot);
+    b->gi_n = gi_n;
+    b->nins = pg->nins;
+    b->prog_ver = pg->prog_version;
+    memcpy(b->prog, pg->prog, (size_t)pg->nins * 16);
+    b->st = *st;
+    b->rcp = *st->prog;
+    b->st.prog = &b->rcp;
+    memcpy(b->pal, pg->consts, sizeof b->pal);
+    gh_bn++;
+}
+
+static void gh_finalize(void)
+{
+    float h = gh_bn >= 4 ? gh_height() : 0.0f;
+    gh_capturing = 0;
+    if (gh_bn >= 4 && h >= 1.35f) {
+        gh_cache_ok = 1;
+        fprintf(stderr, "[GHOST4] captured soldier %d: %d batches, height %.2f m, pass %ux%u\n", gh_cap_ei, gh_bn, (double)h, gh_cw, gh_ch);
+        {
+            int i;
+            for (i = 0; i < gh_bn; i++)
+                fprintf(stderr, "[GHOST4] batch %d: hash %016llX, %u verts, %u tris\n", i, (unsigned long long)gh_b[i].hash, gh_b[i].vin_n, gh_b[i].gi_n / 3);
+        }
+        gh_analyse();
+    } else {
+        fprintf(stderr, "[GHOST4] capture rejected (soldier %d): %d batches, height %.2f m\n", gh_cap_ei, gh_bn, (double)h);
+        if (gh_cap_ei >= 0)
+            gh_npc[gh_cap_ei].rej = 1;
+        gh_free_cache();
+    }
+}
+
+static uint32_t gh_n_drawn, gh_n_notrig, gh_n_texbad, gh_n_eyedraw, gh_n_soldierdraw, gh_n_eye_last;
+static int gh_pmove, gh_play;
+static int gh_pk[GH_MAXB];
+static double gh_play_ph, gh_play_rate, gh_last_ft;
+static int gh_last_cycle, gh_prev_cache_ok;
+
+/* Once per game frame, at the first draw seen after the frame counter changed (any kind of draw). */
+static void gh_frame_begin(void)
+{
+    double dt;
+    float sp;
+    int i2, s;
+    if (gh_capturing && gh_cap_frame != g_nv_ghost.frame)
+        gh_finalize();
+    if (gh_prev_cache_ok && gh_drawn_frame != g_nv_ghost.frame - 1u && gh_last_ft > 0.0)
+        gh_n_notrig++;
+    gh_n_eye_last = 0;
+    gh_ft = gh_now();
+    dt = gh_last_ft > 0.0 ? gh_ft - gh_last_ft : 0.0;
+    if (dt > 0.1) dt = 0.1;
+    gh_last_ft = gh_ft;
+    if (g_nv_ghost.cycle != gh_last_cycle) {                   /* key: throw this type away, take another */
+        gh_last_cycle = g_nv_ghost.cycle;
+        for (i2 = 0; i2 < gh_bn && gh_ban_n < GH_MAXB * 4; i2++)
+            gh_ban[gh_ban_n++] = gh_b[i2].hash;
+        if (gh_ban_n >= GH_MAXB * 4 - GH_MAXB)
+            gh_ban_n = 0;
+        gh_free_cache();
+        fprintf(stderr, "[GHOST4] next soldier type\n");
+    }
+    gh_prev_cache_ok = gh_cache_ok;
+    if (gh_take.rec >= 0 && !gh_take.ready) {                  /* a loop being recorded: the soldier is gone, or stopped for long */
+        const GhNpc *rn = &gh_npc[gh_take.rec];
+        if (!rn->used || g_nv_ghost.frame - rn->frame > 30u || gh_ft - gh_take.tlast > 1.5)
+            gh_take_reset();
+        else if (gh_take.tlast - gh_take.t0 >= 0.6) {
+            int ok = 0;
+            for (s = 0; s < gh_bn; s++)
+                if (gh_sn[s] >= 2)
+                    ok++;
+            if (ok == gh_bn || (ok >= 1 && gh_take.tlast - gh_take.t0 >= 1.2)) {
+                gh_take.ready = 1;
+                fprintf(stderr, "[GHOST4] loop ready: %.2f s, soldier speed %.2f m/s, samples %d %d %d %d %d\n", gh_take.tlast - gh_take.t0,
+                        gh_take.spd_n ? gh_take.spd_sum / gh_take.spd_n : 0.0, gh_sn[0], gh_sn[1], gh_sn[2], gh_sn[3], gh_sn[4]);
+            }
+        }
+    }
+    sp = g_nv_ghost.speed;                                      /* does the player move: with hysteresis */
+    if (!gh_pmove) { if (sp > 0.5f) gh_pmove = 1; }
+    else if (sp < 0.15f) gh_pmove = 0;
+    gh_play = gh_pmove && gh_take.ready && gh_cache_ok && !g_nv_ghost.fp;
+    for (s = 0; s < GH_MAXB; s++)
+        gh_pk[s] = -1;
+    if (gh_play) {
+        double dur = gh_take.tlast - gh_take.t0, mean = gh_take.spd_n ? gh_take.spd_sum / gh_take.spd_n : 1.5, ph;
+        if (mean < 0.6) mean = 0.6;
+        gh_play_rate = (double)sp / mean;
+        if (gh_play_rate < 0.6) gh_play_rate = 0.6;
+        if (gh_play_rate > 1.8) gh_play_rate = 1.8;
+        gh_play_ph += dt * gh_play_rate;
+        if (dur > 0.05) {
+            ph = gh_take.t0 + fmod(gh_play_ph, dur);
+            for (s = 0; s < gh_bn; s++) {
+                int n = gh_sn[s], k;
+                if (!n)
+                    continue;
+                gh_pk[s] = 0;
+                for (k = 0; k < n; k++)
+                    if (gh_smp[s][k].t <= ph)
+                        gh_pk[s] = k;
+            }
+        }
+    } else
+        gh_play_ph = 0.0;
+}
+
+/* The body of the player: V = the view of the draw this is called from. */
+static void gh_do_draw(const Nv2aGpuState *st, const Nv2aGpuProgram *pg, const float V[16])
+{
+    static uint32_t ver, nlog;
+    static float gc[192][4];
+    float Ap[16], T[16], Cp[16], cs, sn, th;
+    uint32_t r, b;
+    int i2, k;
+    static int nodraw = -1;
+    if (nodraw < 0) {
+        const char *en = getenv("RECOMP_GHOST_DRAW");
+        nodraw = en && en[0] == '0';
+    }
+    if (nodraw || !gh_cache_ok || !gh_sp_ok || gh_drawn_frame == g_nv_ghost.frame)
+        return;
+    if (g_nv_ghost.fp && g_nv_ghost.eyeh < 1.25f)               /* crouched or prone: a standing body would fill the view */
+        return;
+    for (i2 = 0; i2 < gh_bn; i2++) {                            /* the textures of the copy must still be what they were */
+        int bad = 0;
+        for (k = 0; k < 4; k++) {
+            const Nv2aGpuTexture *g = &gh_b[i2].st.tex[k];
+            if (g->valid && !g->from_surface) {
+                const TexDec *td = &s_texdec_tab[g->slot];
+                if (td->version != g->version || td->argb != g->argb)
+                    bad = 1;
+            }
+        }
+        if (bad) {
+            gh_n_texbad++;
+            fprintf(stderr, "[GHOST4] texture decode changed (batch %d): the cache is dropped\n", i2);
+            gh_free_cache();
+            return;
+        }
+    }
+    for (i2 = 0; i2 < gh_bn; i2++)                              /* keep the decodes from being evicted */
+        for (k = 0; k < 4; k++) {
+            const Nv2aGpuTexture *g = &gh_b[i2].st.tex[k];
+            if (g->valid && !g->from_surface)
+                s_texdec_tab[g->slot].used = s_texdec_tick;
+        }
+    th = g_nv_ghost.yaw - (float)(g_nv_ghost.yawk >= 0 ? g_nv_ghost.yawk : gh_auto_k) * 1.57079633f;
+    cs = cosf(th); sn = sinf(th);
+    memset(Ap, 0, sizeof Ap);
+    Ap[0] = cs;  Ap[1] = -sn; Ap[4] = sn; Ap[5] = cs; Ap[10] = 1.0f; Ap[15] = 1.0f;
+    Ap[3] = g_nv_ghost.pos[0]; Ap[7] = g_nv_ghost.pos[1]; Ap[11] = g_nv_ghost.pos[2];
+    if (g_nv_ghost.fp) {                                        /* the camera is at the neck: the body stands a little behind it */
+        Ap[3] -= g_nv_ghost.back * cosf(g_nv_ghost.yaw);
+        Ap[7] -= g_nv_ghost.back * sinf(g_nv_ghost.yaw);
+    }
+    gh_m4mul(T, V, Ap);
+    gh_m4mul(Cp, gh_sp, T);                                     /* K' = SP * V * A' (the whole 4x4, the bottom row is the clip w) */
+    memcpy(gc, gh_base, sizeof gc);
+    for (r = 0; r < 4; r++)
+        for (b = 0; b < 4; b++) {
+            gc[160 + r][b] = V[r * 4 + b];
+            gc[164 + r][b] = Cp[r * 4 + b];
+        }
+    for (r = 0; r < 3; r++)
+        for (b = 0; b < 4; b++)
+            gc[168 + r][b] = Ap[r * 4 + b];
+    gh_drawn_frame = g_nv_ghost.frame;
+    gh_n_drawn++;
+    if (nlog < 4) {
+        nlog++;
+        fprintf(stderr, "[GHOST4] draw %d batches at %.2f %.2f %.2f yaw %.1f deg (k %d)\n", gh_bn, (double)Ap[3], (double)Ap[7], (double)Ap[11],
+                (double)(th * 57.29578f), g_nv_ghost.yawk);
+    }
+    for (i2 = 0; i2 < gh_bn; i2++) {
+        const GhBatch *gb = &gh_b[i2];
+        Nv2aGpuState s2 = gb->st;
+        Nv2aGpuProgram g2 = *pg;
+        const float *pal = gb->pal;
+        const uint32_t (*prog)[4] = (const uint32_t (*)[4])gb->prog;
+        s2.color = st->color;
+        s2.zeta_va = st->zeta_va;
+        s2.zscale = st->zscale;
+        s2.clip_x = st->clip_x; s2.clip_y = st->clip_y; s2.clip_w = st->clip_w; s2.clip_h = st->clip_h;
+        s2.trace = 0;
+        if (gh_play && gh_pk[i2] >= 0)
+            pal = gh_smp[i2][gh_pk[i2]].pal;
+        memcpy(gc, pal, sizeof gb->pal);                        /* rows 0..55 (the rest of gc stays) */
+        if (g_nv_ghost.fp)
+            for (k = 0; k < 14; k++)
+                if (gh_cut[i2][k])                              /* a bone with all-zero matrix rows: its vertices collapse to a point, nothing is drawn */
+                    memset(gc[k * 4], 0, 4 * sizeof gc[0]);
+        if (i2 && gb->nins == gh_b[0].nins && gb->prog_ver == gh_b[0].prog_ver && !memcmp(gb->prog, gh_b[0].prog, (size_t)gb->nins * 16))
+            prog = (const uint32_t (*)[4])gh_b[0].prog;         /* one program pointer: the GPU loads it once for all of them */
+        g2.prog = prog;
+        g2.nins = gb->nins;
+        g2.prog_version = gb->prog_ver;
+        g2.vin = (const float (*)[4])gb->vin;
+        g2.nused = gb->nused;
+        memcpy(g2.slot, gb->slot, sizeof g2.slot);
+        g2.consts = (const float (*)[4])gc;
+        g2.const_version = 0xF0000000u + (++ver & 0x0FFFFFFFu);
+        nv2a_gpu_draw_program(&s2, &g2, gb->vin_n, gb->gi, gb->gi_n);
+    }
+}
+
+/* A skinned soldier body draw: capture, tracking, loops. Returns the draw's view in V when it qualifies as a trigger. */
+static void ghost_soldier(const Nv2aGpuState *st, const Nv2aGpuProgram *pg, uint32_t vin_n, const uint32_t *gi, uint32_t gi_n)
+{
+    static double last_log;
+    static uint32_t n_seen, n_still, n_near;
+    float C[16], A[16], Ai[16], Ci[16], K[16], T[16];
+    const float (*c)[4] = pg->consts;
+    uint64_t hh;
+    uint32_t r, b;
+    int i2, ei = -1;
+    float bd = 1.5f;
+    GhNpc *e;
+
+    if (pg->nins != 34 || s_u_used != 0x1Fu || !c || !gi_n)
+        return;
+    for (r = 0; r < 4; r++)
+        for (b = 0; b < 4; b++) {
+            C[r * 4 + b] = c[160 + r][b];
+            A[r * 4 + b] = c[168 + r][b];
+            K[r * 4 + b] = c[164 + r][b];
+        }
+    if (C[12] != 0.0f || C[13] != 0.0f || C[14] != 0.0f || C[15] != 1.0f || A[12] != 0.0f || A[13] != 0.0f || A[14] != 0.0f || A[15] != 1.0f)
+        return;
+    {   /* a world body: both rotations are unit (the first-person hands have a scaled C) */
+        float l0 = C[0] * C[0] + C[1] * C[1] + C[2] * C[2], l1 = A[0] * A[0] + A[1] * A[1] + A[2] * A[2];
+        if (l0 < 0.96f || l0 > 1.04f || l1 < 0.96f || l1 > 1.04f)
+            return;
+    }
+    /* a soldier's body has a pure yaw A (row 2 = 0 0 1); weapons and other attached things do not */
+    if (fabsf(A[2]) > 1e-3f || fabsf(A[6]) > 1e-3f || fabsf(A[8]) > 1e-3f || fabsf(A[9]) > 1e-3f || fabsf(A[10] - 1.0f) > 1e-3f)
+        return;
+    /* the first-person hands and the weapon pass have a unit C and A at the player's own feet: not a soldier */
+    if (fabsf(A[3] - g_nv_ghost.pos[0]) < 0.75f && fabsf(A[7] - g_nv_ghost.pos[1]) < 0.75f && fabsf(A[11] - g_nv_ghost.pos[2]) < 1.5f)
+        return;
+    if (!gh_m4inv(Ai, A) || !gh_m4inv(Ci, C))
+        return;
+    memcpy(gh_base, c, sizeof gh_base);
+    gh_m4mul(T, K, Ai);
+    gh_m4mul(T, T, Ci);                                         /* SP = K * A^-1 * V^-1 */
+    if (gh_sp_ok) {
+        float dm = 0.0f;
+        int k;
+        for (k = 0; k < 16; k++) {
+            float d = fabsf(T[k] - gh_sp[k]);
+            if (d > dm) dm = d;
+        }
+        if (dm > gh_sp_drift)
+            gh_sp_drift = dm;
+    }
+    memcpy(gh_sp, T, sizeof gh_sp);
+    gh_sp_ok = 1;
+
+    /* this soldier's entry: the nearest one seen lately, or a new one */
+    for (i2 = 0; i2 < 24; i2++) {
+        float dx, dy, d;
+        if (!gh_npc[i2].used || g_nv_ghost.frame - gh_npc[i2].frame > 240u)
+            continue;
+        dx = A[3] - gh_npc[i2].pos[0]; dy = A[7] - gh_npc[i2].pos[1];
+        d = sqrtf(dx * dx + dy * dy);
+        if (d < bd) { bd = d; ei = i2; }
+    }
+    if (ei < 0) {
+        uint32_t oldest = 0;
+        for (i2 = 0; i2 < 24; i2++)
+            if (!gh_npc[i2].used || g_nv_ghost.frame - gh_npc[i2].frame > 240u) { ei = i2; break; }
+        if (ei < 0)
+            for (i2 = 0; i2 < 24; i2++)
+                if (g_nv_ghost.frame - gh_npc[i2].frame >= oldest) { oldest = g_nv_ghost.frame - gh_npc[i2].frame; ei = i2; }
+        memset(&gh_npc[ei], 0, sizeof gh_npc[ei]);
+        gh_npc[ei].used = 1;
+        gh_npc[ei].ppos[0] = A[3]; gh_npc[ei].ppos[1] = A[7]; gh_npc[ei].ppos[2] = A[11];
+        gh_npc[ei].ppos_t = gh_ft;
+        gh_npc[ei].frame = g_nv_ghost.frame - 1u;
+    }
+    e = &gh_npc[ei];
+    if (e->frame != g_nv_ghost.frame) {                         /* first batch of this soldier this frame: speed, stillness */
+        double dt = gh_ft - e->ppos_t;
+        if (dt >= 0.1) {
+            float dx = A[3] - e->ppos[0], dy = A[7] - e->ppos[1], inst = sqrtf(dx * dx + dy * dy) / (float)dt;
+            if (inst > 12.0f) inst = 12.0f;
+            e->spd = e->have ? e->spd * 0.6f + inst * 0.4f : inst;
+            e->have = 1;
+            e->ppos[0] = A[3]; e->ppos[1] = A[7]; e->ppos[2] = A[11];
+            e->ppos_t = gh_ft;
+        }
+        e->frame = g_nv_ghost.frame;
+        if (e->have) {
+            if (e->spd < 0.25f) { if (e->still_t == 0.0) e->still_t = gh_ft; }
+            else e->still_t = 0.0;
+        }
+        if (gh_take.rec == ei && !gh_take.ready && e->spd > 0.6f) {
+            gh_take.spd_sum += e->spd;
+            gh_take.spd_n++;
+        }
+    }
+    e->pos[0] = A[3]; e->pos[1] = A[7]; e->pos[2] = A[11];
+    hh = gh_hash(pg, vin_n, gi_n);
+
+    if (!gh_cache_ok) {                                         /* no body yet: wait for a good soldier, then copy him in one frame */
+        n_seen++;
+        if (gh_capturing) {
+            if (gh_cap_frame == g_nv_ghost.frame && A[3] == gh_cap_pos[0] && A[7] == gh_cap_pos[1] && A[11] == gh_cap_pos[2])
+                gh_cap_add(st, pg, vin_n, gi, gi_n, hh);
+        } else if (!e->rej && e->still_t != 0.0 && gh_ft - e->still_t >= 0.5) {
+            float dx = A[3] - g_nv_ghost.pos[0], dy = A[7] - g_nv_ghost.pos[1], d = sqrtf(dx * dx + dy * dy);
+            int banned = 0;
+            for (i2 = 0; i2 < gh_ban_n; i2++)
+                if (gh_ban[i2] == hh)
+                    banned = 1;
+            n_still++;
+            if (d >= 1.0f && d <= 15.0f && fabsf(A[11] - g_nv_ghost.pos[2]) < 3.0f) {
+                n_near++;
+                if (!banned) {
+                    gh_capturing = 1;
+                    gh_cap_ei = ei;
+                    gh_cap_frame = g_nv_ghost.frame;
+                    gh_cap_pos[0] = A[3]; gh_cap_pos[1] = A[7]; gh_cap_pos[2] = A[11];
+                    gh_cva = st->color.va; gh_cw = st->color.width; gh_ch = st->color.height;
+                    gh_bn = 0;
+                    gh_cap_add(st, pg, vin_n, gi, gi_n, hh);
+                }
+            }
+        }
+        if (gh_ft - last_log > 1.5) {
+            last_log = gh_ft;
+            fprintf(stderr, "[GHOST4] NO BODY yet: soldier batches %u, of them still %u, in range %u | capturing %d, player at %.1f %.1f\n", n_seen,
+                    n_still, n_near, gh_capturing, (double)g_nv_ghost.pos[0], (double)g_nv_ghost.pos[1]);
+            n_seen = n_still = n_near = 0;
+        }
+        return;
+    }
+
+    if (!g_nv_ghost.fp && !gh_take.ready && e->have && e->spd > 0.6f) {   /* recording: a moving soldier of the cached type, one loop */
+        int s;
+        for (s = 0; s < gh_bn; s++)
+            if (gh_b[s].hash == hh)
+                break;
+        if (s < gh_bn) {
+            if (gh_take.rec < 0) {
+                gh_take_reset();
+                gh_take.rec = ei;
+                gh_take.t0 = gh_take.tlast = gh_ft;
+            }
+            if (gh_take.rec == ei) {
+                int n = gh_sn[s];
+                if (n < GH_FR && (n == 0 || gh_ft - gh_smp[s][n - 1].t >= 0.016)) {
+                    gh_smp[s][n].t = gh_ft;
+                    memcpy(gh_smp[s][n].pal, c, sizeof gh_smp[s][n].pal);
+                    gh_sn[s] = n + 1;
+                }
+                gh_take.tlast = gh_ft;
+            }
+        }
+    }
+    /* fallback while the eye test finds no draw: right after a body draw of the pass the body was copied from */
+    if (gh_drawn_frame != g_nv_ghost.frame && g_nv_ghost.frame - gh_eye_frame > 30u && st->color.va == gh_cva && st->color.width == gh_cw
+        && st->color.height == gh_ch) {
+        gh_n_soldierdraw++;
+        gh_do_draw(st, pg, C);
+    }
+}
+
+/* Is the view in c[160..163] the third-person camera's: unit rotation rows, bottom row 0 0 0 1, eye within 0.3 m. */
+static int gh_eye_match(const float (*c)[4])
+{
+    int i;
+    float e[3], e2[3], d2 = 0.0f, d3 = 0.0f;
+    if (c[163][0] != 0.0f || c[163][1] != 0.0f || c[163][2] != 0.0f || c[163][3] != 1.0f)
+        return 0;
+    for (i = 0; i < 3; i++) {
+        float l = c[160 + i][0] * c[160 + i][0] + c[160 + i][1] * c[160 + i][1] + c[160 + i][2] * c[160 + i][2];
+        if (!(l > 0.96f && l < 1.04f))
+            return 0;
+    }
+    for (i = 0; i < 3; i++) {
+        e[i] = -(c[160][i] * c[160][3] + c[161][i] * c[161][3] + c[162][i] * c[162][3]);
+        d2 += (e[i] - g_nv_ghost.eye[i]) * (e[i] - g_nv_ghost.eye[i]);
+        e2[i] = -(c[160 + i][0] * c[160][3] + c[160 + i][1] * c[161][3] + c[160 + i][2] * c[162][3]);   /* the other layout (V rows against t) */
+        d3 += (e2[i] - g_nv_ghost.eye[i]) * (e2[i] - g_nv_ghost.eye[i]);
+    }
+    return d2 < 0.09f || d3 < 0.09f;
+}
+
+static void ghost_draw(const Nv2aGpuState *st, const Nv2aGpuProgram *pg, uint32_t vin_n, const uint32_t *gi, uint32_t gi_n)
+{
+    static uint32_t last_frame = 0xFFFFFFFFu;
+    static double last_log;
+    const float (*c)[4] = pg->consts;
+    if (!g_nv_ghost.on)
+        return;
+    if (g_nv_ghost.frame != last_frame) {
+        last_frame = g_nv_ghost.frame;
+        gh_frame_begin();
+    }
+    ghost_soldier(st, pg, vin_n, gi, gi_n);
+    if (gh_cache_ok && gh_sp_ok && c && gh_drawn_frame != g_nv_ghost.frame && gh_eye_match(c)) {
+        gh_n_eye_last++;
+        if (gh_n_eye_last == (g_nv_ghost.fp ? 2u : GH_EYE_DRAW)) {      /* looking at the floor culls most draws: the body must not wait for the 30th */
+            float V[16];
+            uint32_t r, b;
+            for (r = 0; r < 4; r++)
+                for (b = 0; b < 4; b++)
+                    V[r * 4 + b] = c[160 + r][b];
+            gh_n_eyedraw++;
+            gh_eye_frame = g_nv_ghost.frame;
+            gh_do_draw(st, pg, V);
+        }
+    }
+    if (gh_cache_ok && gh_ft - last_log > 1.5) {
+        last_log = gh_ft;
+        fprintf(stderr, "[GHOST4] cache %d batches | frames: drawn %u (eye path %u, soldier path %u), no trigger %u, texture-invalid %u | eye-matching draws last frame %u | SP drift %g | loop %s %.2f s rate %.2f | player speed %.2f moving %d eye height %.2f\n",
+                gh_bn, gh_n_drawn, gh_n_eyedraw, gh_n_soldierdraw, gh_n_notrig, gh_n_texbad, gh_n_eye_last, (double)gh_sp_drift,
+                gh_take.ready ? "ready" : gh_take.rec >= 0 ? "recording" : "none", gh_take.tlast - gh_take.t0, gh_play_rate,
+                (double)g_nv_ghost.speed, gh_pmove, (double)g_nv_ghost.eyeh);
+    }
+}
+
+/* mods\models\*.mdl: a stand-in for one character draw, made from the mesh dump by tools\mesh\char_pipeline.py
+ * (subdivided in Blender, or edited by hand). A draw is recognised the way mesh_dump_batch names it: the hash of its
+ * first vertices' positions + vertex count + triangle count (+ attribute mask and vertex program length). The game's
+ * bone matrices still drive it: each vertex keeps its bone value. RECOMP_CHAR_MODELS=0 turns it off; with
+ * RECOMP_DEV_KEYS=1 Scroll Lock switches it on and off live (to compare in the same scene). */
+typedef struct {
+    uint32_t h32, nins, onv, ont, mask, nattr, nv, nt;
+    uint32_t *idx;
+    float *attr;                /* nv * nattr * 4, attribute order ascending */
+    float *vin;                 /* the same vertices in this draw's input layout, built at the first match */
+    uint32_t vin_nused, vin_slot[16];
+    int logged;
+} CharMdl;
+static CharMdl *s_cm;
+static uint32_t s_cm_n;
+static int s_cm_on = -1;        /* -1 not loaded yet, 0 none, 1 replacing */
+
+static void charmdl_load(void)
+{
+    WIN32_FIND_DATAA fd;
+    HANDLE hf;
+    const char *e = getenv("RECOMP_CHAR_MODELS");
+
+    s_cm_on = 0;
+    if (e && e[0] == '0')
+        return;
+    hf = FindFirstFileA("mods\\models\\*.mdl", &fd);
+    if (hf == INVALID_HANDLE_VALUE)
+        return;
+    do {
+        char path[300];
+        FILE *f;
+        uint32_t hd[9], j;
+        CharMdl m, *grown;
+        size_t na;
+
+        snprintf(path, sizeof path, "mods\\models\\%s", fd.cFileName);
+        f = fopen(path, "rb");
+        if (!f)
+            continue;
+        if (fread(hd, 4, 9, f) != 9 || hd[0] != 0x314C444Du || hd[6] == 0 || hd[6] > 16 || hd[7] == 0
+            || hd[7] > 100000 || hd[8] == 0 || hd[8] > 400000) {
+            fprintf(stderr, "[CHARMOD] %s: bad header, skipped\n", fd.cFileName);
+            fclose(f);
+            continue;
+        }
+        memset(&m, 0, sizeof m);
+        m.h32 = hd[1]; m.nins = hd[2]; m.onv = hd[3]; m.ont = hd[4];
+        m.mask = hd[5]; m.nattr = hd[6]; m.nv = hd[7]; m.nt = hd[8];
+        na = (size_t)m.nv * m.nattr * 4;
+        m.attr = (float *)malloc(na * 4);
+        m.idx = (uint32_t *)malloc((size_t)m.nt * 12);
+        if (!m.attr || !m.idx || fread(m.attr, 4, na, f) != na
+            || fread(m.idx, 4, (size_t)m.nt * 3, f) != (size_t)m.nt * 3) {
+            fprintf(stderr, "[CHARMOD] %s: short file, skipped\n", fd.cFileName);
+            free(m.attr);
+            free(m.idx);
+            fclose(f);
+            continue;
+        }
+        fclose(f);
+        for (j = 0; j < m.nt * 3; j++)
+            if (m.idx[j] >= m.nv)
+                break;
+        if (j < m.nt * 3) {
+            fprintf(stderr, "[CHARMOD] %s: index out of range, skipped\n", fd.cFileName);
+            free(m.attr);
+            free(m.idx);
+            continue;
+        }
+        grown = (CharMdl *)realloc(s_cm, (size_t)(s_cm_n + 1) * sizeof *s_cm);
+        if (!grown) {
+            free(m.attr);
+            free(m.idx);
+            continue;
+        }
+        s_cm = grown;
+        s_cm[s_cm_n++] = m;
+    } while (FindNextFileA(hf, &fd));
+    FindClose(hf);
+    if (s_cm_n) {
+        s_cm_on = 1;
+        fprintf(stderr, "[CHARMOD] %u replacement models loaded from mods\\models\n", s_cm_n);
+    }
+}
+
+/* Called for every vertex-program draw before it goes to the GPU: swaps its vertices and indices for the
+ * replacement model when one matches. */
+static void charmdl_replace(Nv2aGpuProgram *pg, uint32_t *vin_n, const uint32_t **gi, uint32_t *gi_n)
+{
+    static int dev = -1, user_off;
+    static DWORD last_poll;
+    static int key_was;
+    uint64_t h = 0xCBF29CE484222325ull;
+    uint32_t j, a, k, ntri = *gi_n / 3, h32;
+
+    if (s_cm_on < 0)
+        charmdl_load();
+    if (s_cm_on <= 0)
+        return;
+    if (dev < 0) {
+        const char *e = getenv("RECOMP_DEV_KEYS");
+        dev = e && e[0] == '1';
+    }
+    if (dev) {
+        DWORD t = GetTickCount();
+        if (t - last_poll >= 50) {
+            int k2 = (GetAsyncKeyState(VK_SCROLL) & 0x8000) != 0;
+            last_poll = t;
+            if (k2 && !key_was) {
+                user_off = !user_off;
+                fprintf(stderr, "[CHARMOD] replacement models %s\n", user_off ? "OFF" : "ON");
+            }
+            key_was = k2;
+        }
+        if (user_off)
+            return;
+    }
+    if (ntri < 100 || *vin_n < 2)
+        return;
+    for (j = 0; j < *vin_n && j < 64; j++) {
+        const float *p = s_vin[(size_t)j * s_vin_nused + s_vin_slot[0]];
+        uint32_t u[3];
+        memcpy(u, p, 12);
+        h = (h ^ u[0]) * 0x100000001B3ull;
+        h = (h ^ u[1]) * 0x100000001B3ull;
+        h = (h ^ u[2]) * 0x100000001B3ull;
+    }
+    h = (h ^ *vin_n) * 0x100000001B3ull;
+    h = (h ^ ntri) * 0x100000001B3ull;
+    h32 = (uint32_t)(h >> 32);
+    for (k = 0; k < s_cm_n; k++) {
+        CharMdl *m = &s_cm[k];
+        int same = 0;
+        if (m->h32 != h32 || m->onv != *vin_n || m->ont != ntri || m->mask != s_u_used || m->nins != pg->nins)
+            continue;
+        if (!m->vin || m->vin_nused != s_vin_nused)
+            same = 0;
+        else {
+            same = 1;
+            for (a = 0; a < 16; a++)
+                if ((s_u_used & (1u << a)) && m->vin_slot[a] != s_vin_slot[a])
+                    same = 0;
+        }
+        if (!same) {                 /* the same vertices laid out the way this draw's inputs are */
+            float *v = (float *)realloc(m->vin, (size_t)m->nv * s_vin_nused * 16);
+            uint32_t src;
+            if (!v)
+                return;
+            m->vin = v;
+            memset(v, 0, (size_t)m->nv * s_vin_nused * 16);
+            for (j = 0; j < m->nv; j++) {
+                src = 0;
+                for (a = 0; a < 16; a++)
+                    if (s_u_used & (1u << a)) {
+                        memcpy(v + ((size_t)j * s_vin_nused + s_vin_slot[a]) * 4,
+                               m->attr + ((size_t)j * m->nattr + src) * 4, 16);
+                        src++;
+                    }
+            }
+            m->vin_nused = s_vin_nused;
+            memcpy(m->vin_slot, s_vin_slot, sizeof m->vin_slot);
+        }
+        if (!m->logged) {
+            m->logged = 1;
+            fprintf(stderr, "[CHARMOD] first draw of m%08x: %u -> %u vertices, %u -> %u triangles\n", m->h32,
+                    *vin_n, m->nv, ntri, m->nt);
+        }
+        pg->vin = (const float (*)[4])m->vin;
+        *vin_n = m->nv;
+        *gi = m->idx;
+        *gi_n = m->nt * 3;
+        return;
+    }
+}
+
 static void gpu_batch_flush(void)
 {
     static int no_rc = -1;
@@ -3752,6 +5135,7 @@ static void gpu_batch_flush(void)
     if (s_gvs) {
         Nv2aGpuProgram pg;
         mesh_dump_batch(&st);
+        vsh_probe();
         static int near_z = -1;
         if (near_z < 0) {
             const char *e = getenv("RECOMP_CLIP_NEAR_Z");
@@ -3763,6 +5147,13 @@ static void gpu_batch_flush(void)
         pg.vin = (const float (*)[4])s_vin;
         pg.nused = s_vin_nused;
         memcpy(pg.slot, s_vin_slot, sizeof pg.slot);
+        hud_probe(&st, &pg);
+        pg.hud_k = hud_batch_k(&st, &pg, &pg.hud_shift);
+        pg.weapon = wpn_batch(&st, &pg);
+        uint32_t d_vin_n = s_vin_n, d_gi_n = s_gi_n;
+        const uint32_t *d_gi = s_gi;
+        if (!s_gvs_check)
+            charmdl_replace(&pg, &d_vin_n, &d_gi, &d_gi_n);
         pg.aa_sx = s_gpu.aa_sx;
         pg.aa_sy = s_gpu.aa_sy;
         pg.near_o2 = s_xf_o[2];
@@ -3861,9 +5252,11 @@ static void gpu_batch_flush(void)
                     fprintf(stderr, "[VS-CHECK] %u batches checked, %u differ\n",
                             checked, bad);
             } else
-                nv2a_gpu_draw_program(&st, &pg, s_vin_n, s_gi, s_gi_n);
-        } else if (s_gi_n)
-            nv2a_gpu_draw_program(&st, &pg, s_vin_n, s_gi, s_gi_n);
+                nv2a_gpu_draw_program(&st, &pg, d_vin_n, d_gi, d_gi_n);
+        } else if (d_gi_n) {
+            nv2a_gpu_draw_program(&st, &pg, d_vin_n, d_gi, d_gi_n);
+            ghost_draw(&st, &pg, d_vin_n, d_gi, d_gi_n);
+        }
         s_gvs = 0;
         s_gvs_check = 0;
     } else {
@@ -5372,31 +6765,72 @@ static void raster_batch_screen(void)
  * blend and depth state, and how many pixels it actually wrote. "The frame
  * is black" has many causes and this is what tells them apart. */
 
+extern void nv2a_gpu_diag_header(void);
+
+/* The head of a Ctrl+F12 report frame: how big the caches are, so a report says what state the session was in. */
+static void report_header(void)
+{
+    typedef struct { DWORD cb, PageFaultCount; SIZE_T Peak, WS, QPPP, QPNPP, Pf, PfPeak, Pagefile, PagefilePeak, Private; } Pmc;
+    typedef BOOL (WINAPI *PmiFn)(HANDLE, Pmc *, DWORD);
+    uint32_t i, used = 0;
+    Pmc pm;
+    PmiFn fn = (PmiFn)GetProcAddress(GetModuleHandleA("kernel32.dll"), "K32GetProcessMemoryInfo");
+    MEMORYSTATUSEX ms;
+
+    for (i = 0; i < TEXDEC_SLOTS; i++)
+        if (s_texdec_tab[i].gen)
+            used++;
+    fprintf(stderr, "[BDIAG] ---- black-ground report: flip %u, uptime %lu s ----\n", s_gpu.flips,
+            (unsigned long)(GetTickCount64() / 1000ull));
+    fprintf(stderr, "[BDIAG] texdec: slots in use %u/%u decodes %llu texels %llu rechecks %llu changed %llu invals %llu"
+                    " | tick %u serial %u gen %u epoch %u\n",
+            used, (unsigned)TEXDEC_SLOTS, (unsigned long long)s_texdec_decodes, (unsigned long long)s_texdec_texels,
+            (unsigned long long)s_texdec_rechecks, (unsigned long long)s_texdec_changed,
+            (unsigned long long)s_texdec_invals, s_texdec_tick, s_texdec_serial, s_texdec_gen, s_texdec_epoch);
+    memset(&pm, 0, sizeof pm);
+    pm.cb = sizeof pm;
+    ms.dwLength = sizeof ms;
+    if (fn && fn(GetCurrentProcess(), &pm, sizeof pm) && GlobalMemoryStatusEx(&ms))
+        fprintf(stderr, "[BDIAG] memory: process private %llu MB working set %llu MB | system free %llu of %llu MB\n",
+                (unsigned long long)(pm.Private >> 20), (unsigned long long)(pm.WS >> 20),
+                (unsigned long long)(ms.ullAvailPhys >> 20), (unsigned long long)(ms.ullTotalPhys >> 20));
+    nv2a_gpu_diag_header();
+}
+
 static void frame_trace_flip(void)
 {
     static const char *flag = (const char *)-1;
-    static int capturing;
+    static int capturing, report;
+    LONG req;
     extern volatile LONG g_fb_capture_request;
 
     /* F9 in the window (fb_present.c): trace the next frame, then save its
-     * picture as captures\capNNNNN.bmp beside the log. */
+     * picture as captures\capNNNNN.bmp beside the log. Ctrl+F12 (request 2)
+     * is the player's report: the same trace plus report_header, no bitmap
+     * (F12's own screenshot is the picture). */
     if (capturing && s_ftrace == 2) {
         s_ftrace = 0;
         capturing = 0;
-        fprintf(stderr, "[FTRACE] end of frame (F9 capture)\n");
-        CreateDirectoryA("captures", NULL);
-        s_dump_prefix = "captures\\cap";
-        dump_surface_bmp();
-        s_dump_prefix = NULL;
+        fprintf(stderr, "[FTRACE] end of frame (%s)\n", report ? "report" : "F9 capture");
+        if (!report) {
+            CreateDirectoryA("captures", NULL);
+            s_dump_prefix = "captures\\cap";
+            dump_surface_bmp();
+            s_dump_prefix = NULL;
+        }
+        report = 0;
         fflush(stderr);
         return;
     }
     if (flag == (const char *)-1 && getenv("RECOMP_PIXEL_WATCH"))
         sscanf(getenv("RECOMP_PIXEL_WATCH"), "%d,%d", &s_pixwatch_x, &s_pixwatch_y);
-    if (s_ftrace == 0 && InterlockedExchange(&g_fb_capture_request, 0)) {
+    if (s_ftrace == 0 && (req = InterlockedExchange(&g_fb_capture_request, 0)) != 0) {
         capturing = 1;
+        report = req == 2;
         s_ftrace = 2;
-        fprintf(stderr, "[FTRACE] frame begins (flip %u, F9 capture)\n", s_gpu.flips);
+        if (report)
+            report_header();
+        fprintf(stderr, "[FTRACE] frame begins (flip %u, %s)\n", s_gpu.flips, report ? "report" : "F9 capture");
         return;
     }
     if (flag == (const char *)-1) {
@@ -6454,6 +7888,14 @@ static void exec_method_impl(uint32_t subch, uint32_t method, uint32_t param)
             s_gpu.idx[s_gpu.idx_count++] = param;
         break;
     case NV097_NO_OPERATION:
+        /* The weapon pass markers (recomp_manual.c wpn_mark): 0x57504C12 begin, 0x57504C10 end (the low five bits are never 1 or 5,
+         * which D3D's own software methods use). Taken here, before the swap interval below would read them as one. */
+        if ((param & 0xFFFFFF00u) == 0x57504C00u) {
+            g_nv_wpn_pass = (int)((param >> 1) & 1u);
+            if (g_nv_wpn_pass)
+                g_wpn_marks++;
+            return;
+        }
         /* Non-zero, it is one of D3D's software methods, which the GPU traps
          * to D3D's interrupt handler on the console. The swap's interval
          * matters here (nv2a_flip_hold.h); the rest go to the project's

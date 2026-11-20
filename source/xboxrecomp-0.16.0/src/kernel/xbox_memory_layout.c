@@ -2174,6 +2174,14 @@ static void    *g_watch_page;
 static uint32_t g_watch_last;
 static void    *g_watch_veh;
 static RECOMP_TLS int s_watch_stepping;
+static RECOMP_TLS uintptr_t g_watch_rip;      /* host RIP of the access that tripped the read watch */
+uint32_t g_watch_tag;                         /* the game sets this (frame counter) so a reader line can be matched to its own log */
+void (*g_watch_name_hook)(const char *label, uintptr_t a);   /* the game's symbolizer (dbghelp lives in the exe, not here) */
+/* RECOMP_WATCH_DISTINCT=1: in read mode report each reading host RIP once (first frame, regs, guest chain) and only count
+ * the repeats; xbox_WatchSummary prints the counts. Keeps a long "who reads this" run to a few dozen lines. */
+#define WATCH_NRIP 48
+static struct { uintptr_t rip; unsigned n; uint32_t first; } g_watch_rips[WATCH_NRIP];
+static unsigned g_watch_nrip;
 
 /* A plausible guest code address: inside the image's executable sections,
  * as recorded from the section headers at load. */
@@ -2199,6 +2207,29 @@ static void watch_report(void)
         }
         if (g_watch_fault < host || g_watch_fault >= host + rlen)
             return;                 /* another dword on the same page */
+        {
+            static int distinct = -1;
+            if (distinct < 0)
+                distinct = getenv("RECOMP_WATCH_DISTINCT") != NULL;
+            if (distinct) {
+                unsigned k;
+                for (k = 0; k < g_watch_nrip && g_watch_rips[k].rip != g_watch_rip; k++)
+                    ;
+                if (k < g_watch_nrip) {
+                    g_watch_rips[k].n++;
+                    return;
+                }
+                if (g_watch_nrip >= WATCH_NRIP)
+                    return;
+                g_watch_rips[g_watch_nrip].rip = g_watch_rip;
+                g_watch_rips[g_watch_nrip].n = 1;
+                g_watch_rips[g_watch_nrip].first = g_watch_tag;
+                g_watch_nrip++;
+                fprintf(stderr, "[RWATCH] NEW reader #%u at frame %u: ecx=%08X esi=%08X edi=%08X eax=%08X\n", g_watch_nrip, g_watch_tag, g_ecx, g_esi, g_edi, g_eax);
+                if (g_watch_name_hook)
+                    g_watch_name_hook("[RWATCH]   host code", g_watch_rip);
+            }
+        }
         fprintf(stderr, "[RWATCH] %s [%08X] = %08X  (esp=%08X)\n",
                 g_watch_fault_write ? "write" : "read ", (uint32_t)(g_watch_va + (g_watch_fault - host)),
                 *(const uint32_t *)(mem + g_watch_va + (g_watch_fault - host)), esp);
@@ -2276,6 +2307,7 @@ static LONG CALLBACK watch_veh(PEXCEPTION_POINTERS ep)
             if (!VirtualProtect(g_watch_page, 4096, PAGE_READWRITE, &old))
                 return EXCEPTION_CONTINUE_SEARCH;
             g_watch_fault = fault;
+            g_watch_rip = (uintptr_t)ep->ContextRecord->Rip;
             g_watch_fault_write = ep->ExceptionRecord->ExceptionInformation[0] == 1;
             s_watch_stepping = 1;
             ep->ContextRecord->EFlags |= 0x100u;
@@ -2557,6 +2589,14 @@ void xbox_WatchDisarm(void)
 {
 #if defined(_WIN32)
     DWORD old;
+    if (g_watch_nrip) {                 /* RECOMP_WATCH_DISTINCT: the per-reader counts, then start fresh for the next address */
+        unsigned k;
+        for (k = 0; k < g_watch_nrip; k++) {
+            fprintf(stderr, "[RWATCH] reader #%u first frame %u, %u reads\n", k + 1, g_watch_rips[k].first, g_watch_rips[k].n);
+        }
+        g_watch_nrip = 0;
+        fflush(stderr);
+    }
     if (g_watch_page) {
         void *p = g_watch_page;
         g_watch_page = NULL;

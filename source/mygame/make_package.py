@@ -1,4 +1,4 @@
-"""Builds the clean player package (what goes to the GitHub repo / release zip).
+﻿"""Builds the clean player package (what goes to the GitHub repo / release zip).
 
   python make_package.py [version]        -> ..\\release\\MOH-EuropeanAssault-PC-Port-<version>\\ + .zip + .sha256
 
@@ -14,11 +14,12 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 TOOLKIT = os.path.join(ROOT, "xboxrecomp-0.16.0")
-VERSION = sys.argv[1] if len(sys.argv) > 1 else "0.9.2-beta"
+VERSION = sys.argv[1] if len(sys.argv) > 1 else "0.9.3-beta"
 NAME = "MOH-EuropeanAssault-PC-Port-" + VERSION
 OUT = os.path.join(ROOT, "release", NAME)
 DOCS = os.path.join(HERE, "package_docs")
-KEEP_LOCAL = ("game", "xboxdata", "shader_cache", "screenshots", "play_log.txt", "play_log_prev.txt")
+KEEP_LOCAL = ("game", "xboxdata", "shader_cache", "screenshots", "play_log.txt", "play_log_prev.txt",
+              "play_log_crash.txt", "crash.txt", "crash.dmp", "running.flag", "MoH_report.zip")
 
 XEMU_FILES = [
     "src/apu/apu.h", "src/apu/apu_core.c", "src/apu/apu_dsp.c", "src/apu/apu_vp.c", "src/apu/apu_regs.h",
@@ -142,6 +143,8 @@ def main():
             put(os.path.join(HERE, "mods", "textures", f), os.path.join("mods", "textures", f))
     put_tree(os.path.join(HERE, "mods", "screenfx"), os.path.join("mods", "screenfx"))
     put_tree(os.path.join(HERE, "mods", "HDFont"), os.path.join("mods", "HDFont"))
+    put_tree(os.path.join(HERE, "mods", "buttons"), os.path.join("mods", "buttons"))
+    put_tree(os.path.join(HERE, "mods", "blood"), os.path.join("mods", "blood"))   # blood stain atlas (blood_stain.c)
     put_tree(os.path.join(HERE, "languages"), "languages")
 
     # the version the launcher shows and compares with the newest GitHub release

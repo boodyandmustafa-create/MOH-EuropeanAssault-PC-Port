@@ -68,4 +68,23 @@ unsigned xa2_underruns(void);
  * cannot see). */
 uint64_t xa2_samples_played(void);
 
+/* Effect voices apart from the emulated APU's mix (Windows / XAudio2 only; elsewhere they do nothing). frames of interleaved
+ * stereo 48 kHz 16-bit samples that stay valid while they play; returns a handle (> 0) or 0 when no voice is free. */
+#if defined(_WIN32)
+int  xa2_sfx_play(const int16_t *stereo48k, int frames, float vol, float pan, int loop);
+void xa2_sfx_stop(int handle);
+/* the breathing voice (kept apart from the others): one clip at a time, volume adjustable while it plays */
+int  xa2_sfx_breath_busy(void);
+int  xa2_sfx_breath_play(const int16_t *stereo48k, int frames, float vol);
+void xa2_sfx_breath_volume(float vol);
+void xa2_sfx_breath_stop(void);
+#else
+static inline int  xa2_sfx_breath_busy(void) { return 0; }
+static inline int  xa2_sfx_breath_play(const int16_t *s, int f, float v) { (void)s; (void)f; (void)v; return 0; }
+static inline void xa2_sfx_breath_volume(float v) { (void)v; }
+static inline void xa2_sfx_breath_stop(void) { }
+static inline int  xa2_sfx_play(const int16_t *s, int f, float v, float p, int l) { (void)s; (void)f; (void)v; (void)p; (void)l; return 0; }
+static inline void xa2_sfx_stop(int h) { (void)h; }
+#endif
+
 #endif /* APU_XAUDIO2_H */

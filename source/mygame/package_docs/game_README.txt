@@ -1,7 +1,7 @@
 PUT YOUR GAME FILES HERE / ضع ملفات لعبتك هنا
 ============================================
 
-Medal of Honor: European Assault (Xbox, USA / NTSC-U), unpacked, so that this folder holds:
+Medal of Honor: European Assault (Xbox, USA or European version), unpacked, so that this folder holds:
 
     game\DEFAULT.XBE
     game\EAGLRM.O
