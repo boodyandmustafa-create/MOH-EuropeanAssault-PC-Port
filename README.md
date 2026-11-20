@@ -1,8 +1,8 @@
 # Medal of Honor: European Assault — PC Port
 
-**Version 0.9.2-beta** · Windows 10/11 64-bit · unofficial fan project, made with [Claude Code](https://claude.com/claude-code)
+**Version 0.9.3-beta** · Windows 10/11 64-bit · unofficial fan project, made with [Claude Code](https://claude.com/claude-code)
 
-A native Windows port of *Medal of Honor: European Assault* (Xbox, USA / NTSC‑U), made by **statically
+A native Windows port of *Medal of Honor: European Assault* (Xbox), made by **statically
 recompiling** the game's own program (`DEFAULT.XBE`) into a PC executable — this is not an emulator, the
 game's own code runs as native x86‑64.
 
@@ -11,6 +11,124 @@ game's own code runs as native x86‑64.
 > copy of the game.**
 
 **[⬇️ Download the latest release](../../releases/latest)** — see [Install](#install) below.
+
+## What's new in 0.9.3-beta
+
+The biggest release so far: a **map editor**, a new **weapon lighting** system, blood stains, an ultrawide view, a free
+camera, many gameplay options and tools to find crashes.
+
+> ⚠️ **The Map editor is EXPERIMENTAL.** It is off by default and still in testing. It may show bugs, and in rare cases it
+> can crash or freeze the game, especially with many placed soldiers or when changing levels. Your edits are saved per level
+> in `mods\maps\`; if a level misbehaves, turn the editor off or delete that level's file. Please report problems on
+> GitHub Issues with `play_log.txt` and `crash.txt`.
+
+### Map editor (experimental)
+
+<p align="center"><img src="media/m093_mapeditor.gif" width="85%"><br><sub><a href="media/m093_mapeditor.mp4">full-quality video</a></sub></p>
+
+Turn it on in Recomp Settings (F1) > Mods and tools > Map editor, press **Insert** for the free camera, then **Numpad 0** for
+the editor window.
+
+- **Characters:** drag any German or Allied soldier type into the world. It lands where the mouse points, on the floor or on top
+  of a crate. A translucent stand-in shape follows the mouse while you drag.
+- **Props:** drag the pickups the level knows (medkit, ammo, documents, the level's weapons). They glow and can be picked up.
+- **Zones:** your own spawn zones. Pick a soldier type, set soldiers per wave, radius, waves and wake distance, then drag "New
+  zone" into the world. Soldiers are born inside the ring and walk around in it; the next wave comes after you leave and come back.
+- **Delete:** a short right click removes the soldier, prop or zone under the pointer (hold the button to look around).
+- Placed soldiers stay where you drop them and still fight, take cover and throw grenades. Up to 16 living editor soldiers.
+- Everything is saved per mission in `mods\maps\<level>.txt` and comes back at mission start and after a restart. The
+  **Edits: On/Off** button starts a level as the game made it without deleting your file.
+
+*Known limits:* 16 living soldiers at most; no prop rotation; no weapons from other levels; zones cannot be edited after
+placing; rings show through walls; soldiers can be born inside crates; the drag preview is a shape, not the real model; the
+level's own pickups cannot be removed; window text is English only; not in the launcher yet.
+
+### Weapon lighting
+
+<p align="center"><img src="media/m093_weaponlight_on.jpg" width="49%"> <img src="media/m093_weaponlight_off.jpg" width="49%"><br><sub>Left: on (rain and blood on the gun and hands). Right: off.</sub></p>
+
+Recomp Settings (F1) > Effects > **Weapon lighting**: Off / Low / Normal / High / Extreme. The gun and hands get directional
+light and reflections from the scene (a lamp on your right lights the right side of the gun), plus dust after explosions,
+blood splatters when you are hurt and animated rain drops. No fps cost: only the weapon's own pixels are touched.
+
+### Blood stains
+
+<p align="center"><img src="media/m093_blood_stains.gif" width="85%"><br><sub><a href="media/m093_blood_stains.mp4">full-quality video</a></sub></p>
+
+Hits leave blood on walls and floors, deaths leave a pool. Drawn from your own blood pictures, tinted by the Blood colour
+setting, in every level. F1 > Effects > **Blood stains** (Off / Low / Normal / High) and **Stain limit**.
+
+### Weapon feel
+
+<p align="center"><img src="media/m093_gunsway_off.gif" width="48%"> <img src="media/m093_gunsway_on.gif" width="48%"><br><sub>Gun sway: off (left), on (right). Strength 1 to 5.</sub></p>
+
+The weapon has weight: when you turn the camera it lags behind and catches up with a small swing.
+
+<p align="center"><img src="media/m093_sprint_pose.gif" width="85%"><br><sub><a href="media/m093_sprint_pose.mp4">full-quality video</a></sub></p>
+
+**Sprint pose:** while sprinting the weapon is carried across the body and swings with your steps. Firing or aiming brings it
+back at once.
+
+<p align="center"><img src="media/m093_scope_sway.gif" width="85%"><br><sub><a href="media/m093_scope_sway.mp4">full-quality video</a></sub></p>
+
+**Scope sway:** under a quarter of your health, the aim in a scope moves in a slow wave.
+
+### Hit marker and explosions
+
+<p align="center"><img src="media/m093_hit_marker.gif" width="85%"><br><sub>A white X when you hit an enemy, a red X when you kill him. <a href="media/m093_hit_marker.mp4">full-quality video</a></sub></p>
+
+<p align="center"><img src="media/m093_explosion_normal.gif" width="48%"> <img src="media/m093_explosion_x4.gif" width="48%"><br><sub>Explosion size: Normal (left), x4 (right). Options: Normal / x1.5 / x2 / x3 / x4. Damage and radius are unchanged.</sub></p>
+
+### Free camera
+
+<p align="center"><img src="media/m093_freecam.jpg" width="85%"></p>
+
+Press **Insert** in a mission to leave the soldier and fly anywhere (W A S D, mouse, Space / C up and down, Shift faster,
+Ctrl slower). The world stands still by default, or keeps running if you choose.
+
+### More new things
+
+- **Enemy grenades:** enemies who shoot at you now throw grenades (Gameplay > Enemy grenades: Low / Medium / High). The original
+  game never made enemies throw them in the levels we tried.
+- **Ultrawide:** F1 > Video > **Aspect ratio** (4:3 / 16:9 / 21:9 / Auto, restart). The view grows sideways, the HUD goes to
+  the screen edges, menus stay 16:9.
+- **Damage mode** (Normal / Low damage): pistols and machine guns need 7 hits to kill, heavy rifles one head shot or two body shots.
+- **Cheats tab** (launcher and F1): unlimited ammo, invincible, suicide, unlock all missions (your save is not changed), super
+  accuracy, squad mates (Normal / Tough / Weak).
+- **Auto switch weapon:** Off / Empty magazine / Out of ammo.
+- **Grenade macro:** hold the grenade control to take it out and pull the pin, release to throw; your gun comes back after.
+- **Mouse wheel = change weapon** (in a scope it still zooms).
+- **Pain sounds and breathing** with your own WAV files in `mods\sounds\`, no fps cost.
+- **HUD:** a vertical stamina bar, a fourth RUN icon, sharper stance icons, 5 gamepad icon styles (Xbox, Xbox 360, PS2/PS3,
+  PS4, PS5), and 17+ HUD elements you can hide one by one.
+- **Stereo sound** (Audio): Original or Mono. *If a sound seems to fade or vanish when you turn to one side, switch it to Mono.*
+- **Heavy rifle aiming fix** (Gewehr, M1 Garand, scoped rifles and others) at high fps.
+- **Texture mods:** BC7, BC4 and BC5 DDS files now work.
+- **F1 menu** reorganised into categories, movable and resizable; the mouse wheel scrolls it.
+- **Menus with the mouse:** the campaign and mission map screens now follow the pointer; the wheel zooms the first scope of a level.
+- **Fixed:** stutter on entering a level with very large texture packs; a crash when entering a new level; dead bodies flung in
+  the air at high fps (optional **Corpse fix (60 Hz physics)**, off by default, it can freeze the game).
+
+### Help us find crashes
+
+- If the game crashes, open a GitHub issue and attach `crash.txt`, `crash.dmp` and `play_log.txt` from the game folder. Say how
+  long you had been playing and whether you use overlays (RTSS, Discord, Steam, ReShade).
+- The launcher's **Report a problem** button now builds `MoH_report.zip` for you (logs, ini, system info; your Windows user name
+  is removed).
+- If parts of the ground turn pure black, press **F2** while it is black and attach `play_log.txt` and the screenshot.
+
+### Ideas for later versions (not promised)
+
+Things we want to try. None has a date and some may turn out impossible:
+
+- Weapons from other levels placed by the editor (the BAR of the first levels is the hardest case).
+- More editor objects (crates, barrels, vehicles, mounted guns), prop rotation, editing a zone after placing it.
+- Soldiers that really use the game's cover.
+- Higher-detail character models.
+- The editor in the launcher and in Arabic.
+
+Multiplayer reminder: local split-screen works. There is no online or LAN play, no bots and no campaign co-op: the original game
+has no network code.
 
 ## What's new in 0.9.2-beta
 
@@ -172,7 +290,7 @@ Every setting above, changeable without leaving the game.
 
 ## Please know (current limitations)
 
-- Only the **USA / NTSC‑U** version of the game is supported.
+- Both the **USA** and the **European** versions of the game work.
 - 60 to 165 fps now run well on the author's PC (RTX 4060); 240 fps and weaker PCs may still stutter in busy scenes. If
   a mode stutters for you, pick a lower one and send `play_log.txt` (it holds frame-time lines).
 - Sound may **rarely** cut out in very long sessions; a guard restarts it automatically, but if it doesn't,
@@ -231,9 +349,9 @@ not published.
 
 # ميدل أوف أونر: يوروبيان أسولت — نسخة الحاسوب
 
-**الإصدار 0.9.2-beta** · ويندوز 10/11 (64 بت) · مشروع معجبين غير رسمي، بمساعدة [Claude Code](https://claude.com/claude-code)
+**الإصدار 0.9.3-beta** · ويندوز 10/11 (64 بت) · مشروع معجبين غير رسمي، بمساعدة [Claude Code](https://claude.com/claude-code)
 
-نسخة أصلية لويندوز من لعبة *Medal of Honor: European Assault* (إكس بوكس، النسخة الأمريكية NTSC-U)، صُنعت
+نسخة أصلية لويندوز من لعبة *Medal of Honor: European Assault* (إكس بوكس)، صُنعت
 بإعادة ترجمة برنامج اللعبة نفسه (`DEFAULT.XBE`) إلى تنفيذي يعمل على الحاسوب مباشرة — **هذه ليست محاكياً**،
 كود اللعبة نفسه يعمل كـ x86-64 أصلي.
 
@@ -241,6 +359,118 @@ not published.
 > تجاريتان لشركة Electronic Arts. **لا تحتوي هذه الحزمة على أي ملفات من اللعبة — تحتاج نسختك الخاصة.**
 
 **[⬇️ تحميل آخر إصدار](../../releases/latest)**
+
+## الجديد في 0.9.3-beta
+
+أكبر إصدار حتى الآن: **محرر خرائط**، ونظام **إضاءة للسلاح**، وآثار دم، ودعم الشاشة العريضة جداً، وكاميرا حرة، وخيارات لعب كثيرة،
+وأدوات للعثور على أسباب الكراش.
+
+> ⚠️ **محرر الخرائط تجريبي.** مطفأ افتراضياً وما زال قيد الاختبار. ممكن تواجه أخطاء، وفي حالات نادرة قد يكرش اللعبة أو يجمّدها،
+> خاصة مع عدد كبير من الجنود أو عند تبديل المراحل. تعديلاتك محفوظة لكل مرحلة في `mods\maps\`؛ إذا تعطلت مرحلة أطفئ المحرر أو
+> احذف ملفها. أبلغ عن المشاكل في GitHub Issues مع `play_log.txt` و`crash.txt`.
+
+### محرر الخرائط (تجريبي)
+
+<p align="center"><img src="media/m093_mapeditor.gif" width="85%"><br><sub><a href="media/m093_mapeditor.mp4">الفيديو بجودة كاملة</a></sub></p>
+
+فعّله من F1 > Mods and tools > Map editor، ثم اضغط **Insert** للكاميرا الحرة، ثم **Numpad 0** لنافذة المحرر.
+
+- **الشخصيات:** اسحب أي نوع جندي ألماني أو حليف إلى العالم. يهبط حيث يشير الماوس، على الأرض أو فوق صندوق. شكل شفاف يتبع الماوس أثناء السحب.
+- **الأغراض:** اسحب الأغراض التي تعرفها المرحلة (حقيبة طبية، ذخيرة، وثائق، أسلحة المرحلة). تتوهج ويمكن التقاطها.
+- **المناطق (Zones):** مناطق ولادة من صنعك. اختر نوع الجندي، وعدد الجنود في الموجة، ونصف القطر، وعدد الموجات، ومسافة الاستيقاظ، ثم
+  اسحب "New zone" إلى العالم. يولد الجنود داخل الحلقة ويتجولون فيها، وتأتي الموجة التالية بعد أن تبتعد ثم ترجع.
+- **الحذف:** نقرة قصيرة بالزر الأيمن تحذف الجندي أو الغرض أو المنطقة تحت المؤشر (أبقِ الزر مضغوطاً للنظر حولك).
+- الجنود الذين تضعهم يبقون في مكانهم ويقاتلون ويحتمون ويرمون القنابل. حتى 16 جندياً حياً من المحرر.
+- كل شي يُحفظ لكل مهمة في `mods\maps\<level>.txt` ويعود عند بدء المهمة وبعد إعادتها. زر **Edits: On/Off** يبدأ المرحلة كما صنعتها
+  اللعبة دون حذف ملفك.
+
+*حدود معروفة:* 16 جندياً حياً كحد أقصى؛ لا تدوير للأغراض؛ لا أسلحة من مراحل أخرى؛ لا تحرير للمنطقة بعد وضعها؛ الحلقات تظهر عبر
+الجدران؛ قد يولد جندي داخل صندوق؛ معاينة السحب شكل بديل لا الموديل الحقيقي؛ لا يمكن حذف أغراض المرحلة الأصلية؛ نص النافذة
+بالإنجليزية فقط؛ ليس في المشغّل بعد.
+
+### إضاءة السلاح
+
+<p align="center"><img src="media/m093_weaponlight_on.jpg" width="49%"> <img src="media/m093_weaponlight_off.jpg" width="49%"><br><sub>يسار: مفعّلة (مطر ودم على السلاح واليدين). يمين: مطفأة.</sub></p>
+
+F1 > Effects > **Weapon lighting**: Off / Low / Normal / High / Extreme. السلاح واليدان يأخذان ضوءاً واتجاهاً وانعكاسات من المشهد
+(مصباح على يمينك يضيء الجهة اليمنى من السلاح)، مع غبار بعد الانفجارات وبقع دم عند إصابتك وقطرات مطر متحركة. بلا كلفة إطارات.
+
+### آثار الدم
+
+<p align="center"><img src="media/m093_blood_stains.gif" width="85%"><br><sub><a href="media/m093_blood_stains.mp4">الفيديو بجودة كاملة</a></sub></p>
+
+الإصابات تترك دماً على الجدران والأرض، والموت يترك بركة. مرسومة من صور دم خاصة، بلون إعداد Blood colour، في كل المراحل.
+F1 > Effects > **Blood stains** (Off / Low / Normal / High) و**Stain limit**.
+
+### إحساس السلاح
+
+<p align="center"><img src="media/m093_gunsway_off.gif" width="48%"> <img src="media/m093_gunsway_on.gif" width="48%"><br><sub>Gun sway: مطفأ (يسار)، مفعّل (يمين). القوة من 1 إلى 5.</sub></p>
+
+للسلاح وزن: عند تدوير الكاميرا يتأخر ثم يلحق بتأرجح صغير.
+
+<p align="center"><img src="media/m093_sprint_pose.gif" width="85%"><br><sub><a href="media/m093_sprint_pose.mp4">الفيديو بجودة كاملة</a></sub></p>
+
+**وضعية الركض:** أثناء الركض يُحمل السلاح عبر الجسم ويتأرجح مع الخطوات. الإطلاق أو التصويب يعيده فوراً.
+
+<p align="center"><img src="media/m093_scope_sway.gif" width="85%"><br><sub><a href="media/m093_scope_sway.mp4">الفيديو بجودة كاملة</a></sub></p>
+
+**اهتزاز المنظار:** عندما تقل صحتك عن الربع، يتحرك التصويب في المنظار بموجة بطيئة.
+
+### علامة الإصابة والانفجارات
+
+<p align="center"><img src="media/m093_hit_marker.gif" width="85%"><br><sub>X بيضاء عند إصابة عدو، X حمراء عند قتله. <a href="media/m093_hit_marker.mp4">الفيديو بجودة كاملة</a></sub></p>
+
+<p align="center"><img src="media/m093_explosion_normal.gif" width="48%"> <img src="media/m093_explosion_x4.gif" width="48%"><br><sub>حجم الانفجار: عادي (يسار)، x4 (يمين). الخيارات: Normal / x1.5 / x2 / x3 / x4. الضرر ونصف القطر لا يتغيران.</sub></p>
+
+### الكاميرا الحرة
+
+<p align="center"><img src="media/m093_freecam.jpg" width="85%"></p>
+
+اضغط **Insert** في المهمة لتترك الجندي وتطير أينما شئت (W A S D والماوس، Space / C للأعلى والأسفل، Shift أسرع، Ctrl أبطأ).
+العالم يقف افتراضياً، أو يستمر إن اخترت.
+
+### أشياء جديدة أخرى
+
+- **قنابل الأعداء:** الأعداء الذين يطلقون عليك يرمون قنابل (Gameplay > Enemy grenades: منخفض / متوسط / عالٍ). اللعبة الأصلية
+  لا ترمي الأعداء قنابل في المراحل التي جرّبناها.
+- **الشاشة العريضة جداً:** F1 > Video > **Aspect ratio** (4:3 / 16:9 / 21:9 / Auto، يحتاج إعادة تشغيل). يتسع المنظر للجانبين، وتذهب
+  عناصر الـ HUD إلى حواف الشاشة، وتبقى القوائم 16:9.
+- **نمط الضرر** (عادي / ضرر منخفض): المسدسات والرشاشات تحتاج 7 إصابات للقتل، والبنادق الثقيلة طلقة رأس أو طلقتي جسم.
+- **تبويب الغش (Cheats)** في المشغّل وF1: ذخيرة لا نهائية، لا تُقتل، انتحار، فتح كل المراحل (ملف الحفظ لا يتغير)، الدقة الفائقة،
+  رفاق الفريق (عادي / قوي / ضعيف).
+- **تبديل السلاح تلقائياً:** مطفأ / عند فراغ المخزن / عند نفاد الذخيرة.
+- **ماكرو القنبلة:** أمسك زر القنبلة لإخراجها وسحب الدبوس، وأفلته للرمي؛ يعود سلاحك بعدها.
+- **عجلة الماوس = تبديل السلاح** (في المنظار تبقى للتقريب).
+- **أصوات الألم والتنفس** بملفات WAV خاصة بك في `mods\sounds\`، بلا كلفة إطارات.
+- **الـ HUD:** شريط ستامينا عمودي، أيقونة RUN رابعة، أيقونات وضعيات أوضح، 5 أنماط لأيقونات اليد (Xbox، Xbox 360، PS2/PS3، PS4،
+  PS5)، وأكثر من 17 عنصراً من الـ HUD تخفيه واحداً واحداً.
+- **الصوت Stereo:** Original أو Mono. *إذا بدا أن صوتاً يخفت أو يختفي عند تدوير الكاميرا لجهة، حوّله إلى Mono.*
+- **إصلاح تصويب البنادق الثقيلة** (Gewehr وM1 Garand والمناظير وغيرها) عند الإطارات العالية.
+- **تعديل الخامات:** صارت ملفات DDS من نوع BC7 وBC4 وBC5 تعمل.
+- **قائمة F1** مقسمة إلى فئات، تتحرك وتتغير مقاساتها، وعجلة الماوس تمرّرها.
+- **الماوس في القوائم:** شاشات خرائط الحملات والمهام تتبع المؤشر؛ والعجلة تقرّب أول منظار في المرحلة.
+- **إصلاحات:** تقطيع عند دخول مرحلة مع حزم خامات كبيرة جداً؛ كراش عند دخول مرحلة جديدة؛ طيران الجثث في الهواء عند الإطارات العالية
+  (خيار **Corpse fix (60 Hz physics)**، مطفأ افتراضياً وقد يجمّد اللعبة).
+
+### ساعدنا في العثور على الكراشات
+
+- إذا كرشت اللعبة، افتح issue في GitHub وأرفق `crash.txt` و`crash.dmp` و`play_log.txt` من مجلد اللعبة. اذكر كم لعبت من الوقت
+  وهل تستخدم برامج تراكب (RTSS، Discord، Steam، ReShade).
+- زر **Report a problem** في المشغّل صار يبني لك `MoH_report.zip` (اللوغات والإعدادات ومعلومات النظام، مع حذف اسم مستخدم ويندوز).
+- إذا صارت أجزاء من الأرض سوداء تماماً، اضغط **F2** وهي سوداء وأرفق `play_log.txt` ولقطة الشاشة.
+
+### أفكار لإصدارات قادمة (بلا وعود)
+
+أشياء نريد تجربتها. لا تاريخ لأي منها وبعضها قد يتبين أنه مستحيل:
+
+- أسلحة من مراحل أخرى يضعها المحرر (BAR في المراحل الأولى أصعب حالة).
+- كائنات أكثر في المحرر (صناديق، براميل، مركبات، رشاشات مثبتة)، تدوير الأغراض، تحرير المنطقة بعد وضعها.
+- جنود يستعملون الحماية (cover) الأصلية في اللعبة فعلاً.
+- موديلات شخصيات أعلى تفصيلاً.
+- المحرر في المشغّل وبالعربية.
+
+تذكير حول اللعب الجماعي: الشاشة المقسومة المحلية تعمل. لا لعب أونلاين ولا LAN ولا بوتات ولا تعاون في الحملة: اللعبة الأصلية
+بلا كود شبكة.
 
 ## الجديد في 0.9.2-beta
 
@@ -384,7 +614,7 @@ not published.
 
 ## معلومات مهمة
 
-النسخة الأمريكية فقط مدعومة — 60 حتى 165 إطاراً تعمل جيداً على جهاز المطوّر (240 والأجهزة الأضعف قد تتقطع) — قد يختفي الصوت نادراً في
+النسختان الأمريكية والأوروبية تعملان — 60 حتى 165 إطاراً تعمل جيداً على جهاز المطوّر (240 والأجهزة الأضعف قد تتقطع) — قد يختفي الصوت نادراً في
 جلسات طويلة (يُعاد تشغيله تلقائياً) — تعديلات الأسلحة والأصوات تجريبية جزئياً — الترجمة العربية جزئية. القائمة
 الكاملة: [KNOWN_ISSUES.txt](KNOWN_ISSUES.txt).
 
